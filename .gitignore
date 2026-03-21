@@ -1,0 +1,39 @@
+# ── Database ────────────────────────────────────
+# The SQLite DB is runtime data, not source code.
+# It lives on the server, not in the repo.
+prices.db
+*.db
+*.db-shm
+*.db-wal
+
+# ── Secrets ──────────────────────────────────────
+.env
+.env.*
+secrets.py
+
+# ── Positions data ───────────────────────────────
+# positions.json holds your live trades.
+# The example file (positions.example.json) is committed;
+# your real positions.json is not.
+positions.json
+
+# ── Python ───────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.pyo
+.pytest_cache/
+.mypy_cache/
+*.egg-info/
+dist/
+build/
+.venv/
+venv/
+env/
+
+# ── Logs ─────────────────────────────────────────
+*.log
+logs/
+
+# ── OS ───────────────────────────────────────────
+.DS_Store
+Thumbs.db

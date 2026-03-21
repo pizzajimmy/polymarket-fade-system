@@ -1,0 +1,927 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Polymarket Tools</title>
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; font-size: 13px; background: #f5f5f0; color: #1a1a18; min-height: 100vh; }
+.app { max-width: 900px; margin: 0 auto; padding: 20px 16px 60px; }
+
+/* Top nav */
+.top-nav { display: flex; gap: 4px; margin-bottom: 24px; background: #eeecea; border-radius: 10px; padding: 4px; }
+.tnb { flex: 1; padding: 8px 12px; border-radius: 8px; border: none; font-size: 13px; font-weight: 500; cursor: pointer; background: transparent; color: #6b6a65; transition: all 0.15s; text-align: center; }
+.tnb.on { background: #fff; color: #1a1a18; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
+
+/* Panels */
+.panel { display: none; }
+.panel.on { display: block; }
+
+/* Section labels */
+.sh { font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; color: #9c9a92; margin: 20px 0 10px; }
+.sh:first-child { margin-top: 0; }
+
+/* Metric cards */
+.metric-grid { display: grid; grid-template-columns: repeat(4, minmax(0,1fr)); gap: 8px; margin-bottom: 20px; }
+.metric-card { background: #fff; border-radius: 10px; padding: 12px 14px; border: 0.5px solid rgba(0,0,0,0.08); }
+.metric-label { font-size: 11px; color: #9c9a92; margin-bottom: 5px; }
+.metric-val { font-size: 20px; font-weight: 600; color: #1a1a18; }
+.metric-sub { font-size: 10px; color: #b4b2a9; margin-top: 2px; }
+
+/* Cards */
+.card { background: #fff; border-radius: 12px; border: 0.5px solid rgba(0,0,0,0.08); padding: 16px; margin-bottom: 12px; }
+
+/* Form elements */
+.form-grid { display: grid; grid-template-columns: minmax(0,1fr) minmax(0,1fr); gap: 10px; margin-bottom: 12px; }
+.form-group { display: flex; flex-direction: column; gap: 4px; }
+.form-group.full { grid-column: 1 / -1; }
+.form-label { font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; color: #9c9a92; }
+input[type="text"], input[type="number"], input[type="date"], select, textarea {
+  padding: 8px 10px; border-radius: 7px; border: 0.5px solid rgba(0,0,0,0.15);
+  font-size: 13px; color: #1a1a18; background: #faf9f7; outline: none;
+  transition: border-color 0.15s; width: 100%;
+}
+input:focus, select:focus { border-color: #378ADD; background: #fff; }
+select { cursor: pointer; }
+
+/* Buttons */
+button { cursor: pointer; font-family: inherit; }
+.btn { padding: 8px 16px; border-radius: 8px; border: 0.5px solid rgba(0,0,0,0.15); font-size: 13px; font-weight: 500; background: #fff; color: #1a1a18; transition: all 0.15s; }
+.btn:hover { background: #f5f5f0; }
+.btn.primary { background: #1a1a18; color: #fff; border-color: #1a1a18; }
+.btn.primary:hover { background: #333; }
+.btn.danger { color: #a32d2d; border-color: #a32d2d; }
+.btn.danger:hover { background: #fcebeb; }
+.btn.sm { padding: 4px 10px; font-size: 11px; }
+.btn.success { background: #e8f5ee; color: #0f6e56; border-color: #0f6e56; }
+
+/* Tables */
+.tbl-wrap { overflow-x: auto; border-radius: 10px; border: 0.5px solid rgba(0,0,0,0.08); }
+table { width: 100%; border-collapse: collapse; font-size: 12px; background: #fff; }
+th { font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; color: #9c9a92; padding: 10px 12px; text-align: left; border-bottom: 0.5px solid rgba(0,0,0,0.08); white-space: nowrap; background: #faf9f7; }
+td { padding: 9px 12px; border-bottom: 0.5px solid rgba(0,0,0,0.05); color: #1a1a18; vertical-align: middle; }
+tbody tr:last-child td { border-bottom: none; }
+tbody tr:hover td { background: #faf9f7; }
+.empty-row td { text-align: center; color: #b4b2a9; padding: 28px; }
+
+/* Pills */
+.pill { display: inline-block; font-size: 10px; font-weight: 600; padding: 2px 8px; border-radius: 6px; white-space: nowrap; }
+.pill-open { background: #e6f1fb; color: #0c447c; }
+.pill-closed { background: #f1efe8; color: #5f5e5a; }
+.pill-go { background: #e1f5ee; color: #085041; }
+.pill-weakgo { background: #faeeda; color: #633806; }
+.pill-nogo { background: #fcebeb; color: #791f1f; }
+.pill-win { background: #e1f5ee; color: #085041; }
+.pill-loss { background: #fcebeb; color: #791f1f; }
+.pill-sentiment { background: #faeeda; color: #633806; }
+.pill-structural { background: #fcebeb; color: #791f1f; }
+.pill-unclear { background: #f1efe8; color: #5f5e5a; }
+.pill-traded { background: #e1f5ee; color: #085041; }
+.pill-passed { background: #f1efe8; color: #5f5e5a; }
+
+/* Alert boxes */
+.alert { border-radius: 8px; padding: 10px 13px; font-size: 12px; line-height: 1.5; margin-bottom: 12px; }
+.alert.warning { background: #faeeda; color: #633806; }
+.alert.info { background: #e6f1fb; color: #0c447c; }
+.alert.success { background: #e1f5ee; color: #085041; }
+.alert.danger { background: #fcebeb; color: #791f1f; }
+.alert.neutral { background: #f1efe8; color: #5f5e5a; }
+.alert-title { font-weight: 600; margin-bottom: 3px; }
+
+/* News type selector */
+.nt-group { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 4px; }
+.nt-btn { padding: 5px 13px; border-radius: 7px; border: 0.5px solid rgba(0,0,0,0.15); font-size: 12px; font-weight: 500; background: #faf9f7; color: #6b6a65; transition: all 0.15s; }
+
+/* Verdict box */
+.verdict { margin-top: 14px; }
+
+/* Divider */
+.divider { border: none; border-top: 0.5px solid rgba(0,0,0,0.08); margin: 16px 0; }
+
+/* Inline input in table */
+.table-input { width: 64px; padding: 4px 7px; border-radius: 5px; border: 0.5px solid rgba(0,0,0,0.15); font-size: 11px; background: #faf9f7; color: #1a1a18; }
+.table-input:focus { border-color: #378ADD; outline: none; background: #fff; }
+
+/* Score breakdown */
+.score-rows { display: flex; flex-direction: column; gap: 4px; margin-top: 10px; }
+.score-row { display: flex; align-items: center; gap: 8px; font-size: 11px; }
+.score-row-label { color: #6b6a65; width: 160px; flex-shrink: 0; }
+.score-bar-bg { flex: 1; height: 4px; background: #eeecea; border-radius: 2px; overflow: hidden; }
+.score-bar-fill { height: 100%; border-radius: 2px; transition: width 0.3s; }
+.score-row-pts { font-weight: 600; min-width: 32px; text-align: right; font-size: 11px; }
+
+/* USDC row */
+.usdc-row { display: flex; align-items: center; gap: 10px; margin-bottom: 18px; flex-wrap: wrap; }
+.usdc-label { font-size: 13px; color: #6b6a65; }
+.usdc-input { width: 130px; }
+
+/* Tabs for sub-sections */
+.sub-tabs { display: flex; gap: 6px; margin-bottom: 12px; }
+.stab { padding: 5px 12px; border-radius: 14px; border: 0.5px solid rgba(0,0,0,0.15); font-size: 11px; font-weight: 500; background: transparent; color: #6b6a65; cursor: pointer; }
+.stab.on { background: #1a1a18; color: #fff; border-color: #1a1a18; }
+
+/* Position P&L colours */
+.pos-pnl.green { color: #0f6e56; font-weight: 600; }
+.pos-pnl.red { color: #a32d2d; font-weight: 600; }
+
+@media (max-width: 600px) {
+  .metric-grid { grid-template-columns: repeat(2, 1fr); }
+  .form-grid { grid-template-columns: 1fr; }
+}
+</style>
+</head>
+<body>
+<div class="app">
+  <div class="top-nav">
+    <button class="tnb on" onclick="switchPanel('bankroll', this)">Bankroll tracker</button>
+    <button class="tnb" onclick="switchPanel('scorecard', this)">Entry scorecard</button>
+  </div>
+
+  <!-- ═══════════════════════════════════════════════
+       PANEL 1: BANKROLL TRACKER
+  ═══════════════════════════════════════════════ -->
+  <div class="panel on" id="panel-bankroll">
+
+    <div class="usdc-row">
+      <span class="usdc-label">Total USDC wallet balance</span>
+      <input type="number" id="usdc-total" class="usdc-input" value="1000" min="0" step="50" placeholder="1000">
+      <button class="btn primary" onclick="saveUSDC()">Update balance</button>
+    </div>
+
+    <div class="metric-grid">
+      <div class="metric-card">
+        <div class="metric-label">Total USDC</div>
+        <div class="metric-val" id="m-total">$1,000</div>
+      </div>
+      <div class="metric-card">
+        <div class="metric-label">Committed (open)</div>
+        <div class="metric-val" id="m-committed">$0</div>
+        <div class="metric-sub" id="m-pos-count">0 positions</div>
+      </div>
+      <div class="metric-card">
+        <div class="metric-label">Available bankroll</div>
+        <div class="metric-val" id="m-available" style="color:#0f6e56">$1,000</div>
+        <div class="metric-sub">→ Kelly calc input</div>
+      </div>
+      <div class="metric-card">
+        <div class="metric-label">Unrealised P&L</div>
+        <div class="metric-val" id="m-pnl">$0.00</div>
+        <div class="metric-sub" id="m-closed-pnl">Realised: $0</div>
+      </div>
+    </div>
+
+    <!-- Add position -->
+    <div class="sh">Add new position</div>
+    <div class="card">
+      <div class="form-grid">
+        <div class="form-group full">
+          <label class="form-label">Market question</label>
+          <input type="text" id="pos-question" placeholder="e.g. Will policy X pass before June?">
+        </div>
+        <div class="form-group">
+          <label class="form-label">Market URL</label>
+          <input type="text" id="pos-url" placeholder="https://polymarket.com/event/...">
+        </div>
+        <div class="form-group">
+          <label class="form-label">Token ID (YES — from clobTokenIds[0])</label>
+          <input type="text" id="pos-token" placeholder="71321045abc...">
+        </div>
+        <div class="form-group">
+          <label class="form-label">Entry date</label>
+          <input type="date" id="pos-date">
+        </div>
+        <div class="form-group">
+          <label class="form-label">Entry price (¢)</label>
+          <input type="number" id="pos-entry" min="1" max="99" step="0.5" placeholder="30" oninput="calcPosCost()">
+        </div>
+        <div class="form-group">
+          <label class="form-label">Position size (USDC $)</label>
+          <input type="number" id="pos-size" min="10" step="10" placeholder="250" oninput="calcPosCost()">
+        </div>
+        <div class="form-group">
+          <label class="form-label">Target exit (¢)</label>
+          <input type="number" id="pos-target" min="1" max="99" placeholder="43">
+        </div>
+        <div class="form-group">
+          <label class="form-label">Stop loss (¢)</label>
+          <input type="number" id="pos-stop" min="1" max="99" placeholder="22">
+        </div>
+      </div>
+      <div id="pos-preview" style="font-size:12px;color:#6b6a65;margin-bottom:12px;min-height:16px"></div>
+      <button class="btn primary" onclick="addPosition()">Add position</button>
+    </div>
+
+    <!-- Open positions -->
+    <div class="sh">Open positions</div>
+    <div class="tbl-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Market</th>
+            <th>Entry</th>
+            <th>Size</th>
+            <th>Shares</th>
+            <th>Target</th>
+            <th>Stop</th>
+            <th>Current ¢</th>
+            <th>Unreal. P&L</th>
+            <th>Days</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody id="open-tbody">
+          <tr class="empty-row"><td colspan="10">No open positions yet</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <!-- Close position modal (inline) -->
+    <div id="close-modal" style="display:none;margin-top:8px">
+      <div class="card" style="border-color:#1a1a18">
+        <div class="sh" style="margin-top:0">Close position</div>
+        <div id="close-modal-title" style="font-size:13px;font-weight:500;margin-bottom:10px;color:#1a1a18"></div>
+        <div class="form-grid">
+          <div class="form-group">
+            <label class="form-label">Exit price (¢)</label>
+            <input type="number" id="close-price" min="1" max="99" placeholder="41">
+          </div>
+          <div class="form-group">
+            <label class="form-label">Exit date</label>
+            <input type="date" id="close-date">
+          </div>
+          <div class="form-group full">
+            <label class="form-label">Exit reason</label>
+            <select id="close-reason">
+              <option value="TARGET">Target hit</option>
+              <option value="STOP">Stop loss hit</option>
+              <option value="STALE">Stale — 14+ days no recovery</option>
+              <option value="STRUCTURAL">Structural news — emergency exit</option>
+              <option value="MANUAL">Manual decision</option>
+            </select>
+          </div>
+        </div>
+        <div style="display:flex;gap:8px">
+          <button class="btn primary" onclick="confirmClose()">Confirm close</button>
+          <button class="btn" onclick="cancelClose()">Cancel</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Closed trades -->
+    <div class="sh">Closed trades log</div>
+    <div class="tbl-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Market</th>
+            <th>Entry</th>
+            <th>Exit</th>
+            <th>Size</th>
+            <th>Realised P&L</th>
+            <th>Return %</th>
+            <th>Days</th>
+            <th>Reason</th>
+            <th>Outcome</th>
+          </tr>
+        </thead>
+        <tbody id="closed-tbody">
+          <tr class="empty-row"><td colspan="9">No closed trades yet</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════════════════════════════
+       PANEL 2: ENTRY SCORECARD
+  ═══════════════════════════════════════════════ -->
+  <div class="panel" id="panel-scorecard">
+
+    <div class="sh" style="margin-top:0">New candidate evaluation</div>
+    <div class="card">
+      <div class="alert warning">
+        <div class="alert-title">Evaluation discipline</div>
+        Fill all fields and write your news classification before saving. Source prices are timestamped at save time. This record is locked — it counts whether you trade or pass.
+      </div>
+
+      <div class="form-grid">
+        <div class="form-group full">
+          <label class="form-label">Market question</label>
+          <input type="text" id="sc-q" placeholder="e.g. Will policy X pass before June?">
+        </div>
+        <div class="form-group">
+          <label class="form-label">Market URL</label>
+          <input type="text" id="sc-url" placeholder="https://polymarket.com/...">
+        </div>
+        <div class="form-group">
+          <label class="form-label">Market category</label>
+          <select id="sc-cat" onchange="calcSC()">
+            <option value="politics">Political / policy</option>
+            <option value="crypto">Crypto / tech</option>
+            <option value="macro">Macro / economic</option>
+            <option value="sports">Sports / entertainment</option>
+            <option value="science">Science / regulatory</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Pre-news price estimate (¢)</label>
+          <input type="number" id="sc-pre" min="5" max="95" placeholder="60" oninput="calcSC()">
+        </div>
+        <div class="form-group">
+          <label class="form-label">Current Polymarket price (¢)</label>
+          <input type="number" id="sc-pm" min="5" max="95" placeholder="30" oninput="calcSC()">
+        </div>
+        <div class="form-group full">
+          <label class="form-label">News headline / catalyst — be specific</label>
+          <input type="text" id="sc-headline" placeholder="Exact headline or event that caused the drop...">
+        </div>
+        <div class="form-group full">
+          <label class="form-label">News classification — decide before checking verdict below</label>
+          <div class="nt-group" id="nt-group">
+            <button class="nt-btn" onclick="setNT('SENTIMENT',this)">Sentiment / optics</button>
+            <button class="nt-btn" onclick="setNT('STRUCTURAL',this)">Structural — outcome changes</button>
+            <button class="nt-btn" onclick="setNT('UNCLEAR',this)">Unclear — needs research</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="divider"></div>
+      <div class="sh" style="margin-top:0">Cross-platform source prices — enter 0 if market not found</div>
+
+      <div class="form-grid">
+        <div class="form-group">
+          <label class="form-label">Manifold (¢)</label>
+          <input type="number" id="sc-mf" min="0" max="100" placeholder="0" oninput="calcSC()">
+        </div>
+        <div class="form-group">
+          <label class="form-label">Kalshi (¢)</label>
+          <input type="number" id="sc-ka" min="0" max="100" placeholder="0" oninput="calcSC()">
+        </div>
+        <div class="form-group">
+          <label class="form-label">Metaculus (¢)</label>
+          <input type="number" id="sc-mc" min="0" max="100" placeholder="0" oninput="calcSC()">
+        </div>
+        <div class="form-group">
+          <label class="form-label">Your prior estimate (¢)</label>
+          <input type="number" id="sc-pr" min="0" max="100" placeholder="0" oninput="calcSC()">
+        </div>
+        <div class="form-group">
+          <label class="form-label">Ambient vol score (pts/day avg)</label>
+          <input type="number" id="sc-vol" min="0" max="20" step="0.5" placeholder="0" oninput="calcSC()">
+        </div>
+        <div class="form-group">
+          <label class="form-label">Confidence in fair value (%)</label>
+          <input type="number" id="sc-conf" min="50" max="90" step="5" placeholder="65" oninput="calcSC()">
+        </div>
+      </div>
+
+      <!-- Live verdict -->
+      <div id="sc-verdict"></div>
+
+      <div style="display:flex;gap:8px;margin-top:14px;flex-wrap:wrap">
+        <button class="btn primary" onclick="saveEval()">Save evaluation (locks timestamp)</button>
+        <button class="btn" onclick="clearSC()">Clear form</button>
+      </div>
+    </div>
+
+    <!-- Stats row -->
+    <div class="metric-grid" style="margin-bottom:16px">
+      <div class="metric-card">
+        <div class="metric-label">Total evaluations</div>
+        <div class="metric-val" id="stat-total">0</div>
+      </div>
+      <div class="metric-card">
+        <div class="metric-label">GO decisions</div>
+        <div class="metric-val" id="stat-go" style="color:#0f6e56">0</div>
+        <div class="metric-sub" id="stat-go-pct">0% of total</div>
+      </div>
+      <div class="metric-card">
+        <div class="metric-label">Trades taken</div>
+        <div class="metric-val" id="stat-traded">0</div>
+        <div class="metric-sub" id="stat-pass-pct">0 passed</div>
+      </div>
+      <div class="metric-card">
+        <div class="metric-label">Avg Manifold gap</div>
+        <div class="metric-val" id="stat-mfgap">—</div>
+        <div class="metric-sub">on GO decisions</div>
+      </div>
+    </div>
+
+    <!-- Evaluation log -->
+    <div class="sh">Evaluation log — all candidates (traded and passed)</div>
+    <div class="tbl-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Timestamp</th>
+            <th>Market</th>
+            <th>Drop</th>
+            <th>News</th>
+            <th>Mfd gap</th>
+            <th>Fair value</th>
+            <th>Score</th>
+            <th>Decision</th>
+            <th>Traded?</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody id="sc-tbody">
+          <tr class="empty-row"><td colspan="10">No evaluations logged — fill in a candidate above</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<script>
+// ── State ─────────────────────────────────────────────
+let S = { usdc: 1000, positions: [], evaluations: [] };
+let ntSelected = '';
+let closingId = null;
+
+// Category weights for weighted fair value
+const CW = {
+  politics: { mf:0.35, ka:0.28, mc:0.20, pr:0.17 },
+  crypto:   { mf:0.15, ka:0.20, mc:0.10, pr:0.55 },
+  macro:    { mf:0.25, ka:0.40, mc:0.20, pr:0.15 },
+  sports:   { mf:0.20, ka:0.25, mc:0.15, pr:0.40 },
+  science:  { mf:0.20, ka:0.15, mc:0.45, pr:0.20 }
+};
+
+// ── Persistence ───────────────────────────────────────
+async function loadState() {
+  try {
+    const r = await window.storage.get('pm_tools_v2');
+    if (r && r.value) S = JSON.parse(r.value);
+  } catch(e) { /* first load */ }
+  document.getElementById('usdc-total').value = S.usdc;
+  renderAll();
+}
+
+async function persist() {
+  try { await window.storage.set('pm_tools_v2', JSON.stringify(S)); } catch(e) {}
+}
+
+// ── Panel switching ───────────────────────────────────
+function switchPanel(id, btn) {
+  document.querySelectorAll('.panel').forEach(p => p.classList.remove('on'));
+  document.querySelectorAll('.tnb').forEach(b => { b.classList.remove('on'); });
+  document.getElementById('panel-' + id).classList.add('on');
+  btn.classList.add('on');
+}
+
+// ── Bankroll ──────────────────────────────────────────
+function saveUSDC() {
+  S.usdc = parseFloat(document.getElementById('usdc-total').value) || 0;
+  persist();
+  renderSummary();
+}
+
+function renderSummary() {
+  const open = S.positions.filter(p => p.status === 'OPEN');
+  const committed = open.reduce((s,p) => s + p.cost, 0);
+  const unrealised = open.reduce((s,p) => p.currentPrice ? s + ((p.currentPrice - p.entryPrice)/100)*p.shares : s, 0);
+  const closed = S.positions.filter(p => p.status === 'CLOSED');
+  const realised = closed.reduce((s,p) => s + (p.realisedPnl || 0), 0);
+  const available = S.usdc - committed;
+
+  setText('m-total', '$' + fmt(S.usdc));
+  setText('m-committed', '$' + fmt(committed));
+  setText('m-pos-count', open.length + ' position' + (open.length !== 1 ? 's' : ''));
+  const avEl = document.getElementById('m-available');
+  avEl.textContent = '$' + fmt(available);
+  avEl.style.color = available < 100 ? '#a32d2d' : '#0f6e56';
+  const pnlEl = document.getElementById('m-pnl');
+  pnlEl.textContent = (unrealised >= 0 ? '+' : '') + '$' + Math.abs(unrealised).toFixed(2);
+  pnlEl.style.color = unrealised >= 0 ? '#0f6e56' : '#a32d2d';
+  setText('m-closed-pnl', 'Realised: ' + (realised >= 0 ? '+' : '') + '$' + Math.abs(realised).toFixed(2));
+}
+
+function calcPosCost() {
+  const e = parseFloat(document.getElementById('pos-entry').value);
+  const s = parseFloat(document.getElementById('pos-size').value);
+  const el = document.getElementById('pos-preview');
+  if (e && s && e > 0) {
+    const shares = s / (e/100);
+    const maxReturn = (1 - e/100) * shares;
+    el.textContent = Math.round(shares) + ' shares · max return if YES: $' + Math.round(maxReturn) + ' · max loss if NO: -$' + Math.round(s);
+  } else { el.textContent = ''; }
+}
+
+function addPosition() {
+  const q    = document.getElementById('pos-question').value.trim();
+  const url  = document.getElementById('pos-url').value.trim();
+  const tok  = document.getElementById('pos-token').value.trim();
+  const date = document.getElementById('pos-date').value;
+  const ep   = parseFloat(document.getElementById('pos-entry').value);
+  const sz   = parseFloat(document.getElementById('pos-size').value);
+  const tgt  = parseFloat(document.getElementById('pos-target').value) || null;
+  const stp  = parseFloat(document.getElementById('pos-stop').value) || null;
+
+  if (!q)  { alert('Market question is required.'); return; }
+  if (!ep || ep <= 0) { alert('Entry price is required.'); return; }
+  if (!sz || sz < 10) { alert('Position size must be at least $10.'); return; }
+
+  S.positions.push({
+    id: Date.now(),
+    question: q, url, tokenId: tok,
+    entryDate: date || today(),
+    entryPrice: ep,
+    shares: Math.round((sz / (ep/100)) * 10) / 10,
+    cost: Math.round(sz * 100) / 100,
+    targetExit: tgt, stopLoss: stp,
+    currentPrice: null,
+    status: 'OPEN'
+  });
+
+  ['pos-question','pos-url','pos-token','pos-entry','pos-size','pos-target','pos-stop'].forEach(id => {
+    document.getElementById(id).value = '';
+  });
+  document.getElementById('pos-preview').textContent = '';
+  document.getElementById('pos-date').value = today();
+  persist();
+  renderAll();
+}
+
+function renderOpenPositions() {
+  const tbody = document.getElementById('open-tbody');
+  const open = S.positions.filter(p => p.status === 'OPEN');
+  if (!open.length) {
+    tbody.innerHTML = '<tr class="empty-row"><td colspan="10">No open positions — add one above</td></tr>';
+    return;
+  }
+  tbody.innerHTML = open.map(p => {
+    const days = daysSince(p.entryDate);
+    const daysColor = days >= 14 ? '#ba7517' : '#9c9a92';
+    const pnl = p.currentPrice ? ((p.currentPrice - p.entryPrice)/100) * p.shares : null;
+    const pnlStr = pnl !== null ? (pnl >= 0 ? '+$' : '-$') + Math.abs(pnl).toFixed(2) : '—';
+    const pnlColor = pnl === null ? '#9c9a92' : pnl >= 0 ? '#0f6e56' : '#a32d2d';
+    const shortQ = trunc(p.question, 26);
+    const tgt = p.targetExit ? `<span style="color:#0f6e56">${p.targetExit}¢</span>` : '<span style="color:#b4b2a9">—</span>';
+    const stp = p.stopLoss ? `<span style="color:#a32d2d">${p.stopLoss}¢</span>` : '<span style="color:#b4b2a9">—</span>';
+    return `<tr>
+      <td title="${p.question}">${p.url ? `<a href="${p.url}" style="color:#185fa5;text-decoration:none">${shortQ}</a>` : shortQ}</td>
+      <td>${p.entryPrice}¢</td>
+      <td>$${Math.round(p.cost)}</td>
+      <td>${Math.round(p.shares)}</td>
+      <td>${tgt}</td>
+      <td>${stp}</td>
+      <td><input type="number" class="table-input" value="${p.currentPrice || ''}" placeholder="—" onchange="updateCP(${p.id}, this.value)" min="1" max="99" step="0.5"></td>
+      <td style="color:${pnlColor};font-weight:600">${pnlStr}</td>
+      <td style="color:${daysColor}">${days}d</td>
+      <td style="white-space:nowrap">
+        <button class="btn sm" onclick="openCloseModal(${p.id})" style="margin-right:4px">Close</button>
+        <button class="btn sm danger" onclick="deletePos(${p.id})">✕</button>
+      </td>
+    </tr>`;
+  }).join('');
+}
+
+function updateCP(id, val) {
+  const p = S.positions.find(x => x.id === id);
+  if (p) { p.currentPrice = parseFloat(val) || null; persist(); renderSummary(); }
+}
+
+function openCloseModal(id) {
+  closingId = id;
+  const p = S.positions.find(x => x.id === id);
+  document.getElementById('close-modal-title').textContent = trunc(p.question, 60);
+  document.getElementById('close-price').value = p.currentPrice || '';
+  document.getElementById('close-date').value = today();
+  document.getElementById('close-modal').style.display = 'block';
+  document.getElementById('close-modal').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+}
+
+function cancelClose() {
+  closingId = null;
+  document.getElementById('close-modal').style.display = 'none';
+}
+
+function confirmClose() {
+  if (!closingId) return;
+  const p = S.positions.find(x => x.id === closingId);
+  if (!p) return;
+  const exitPrice = parseFloat(document.getElementById('close-price').value);
+  const exitDate  = document.getElementById('close-date').value || today();
+  const reason    = document.getElementById('close-reason').value;
+  if (!exitPrice) { alert('Exit price is required.'); return; }
+
+  p.status     = 'CLOSED';
+  p.exitPrice  = exitPrice;
+  p.exitDate   = exitDate;
+  p.closeReason = reason;
+  p.realisedPnl = Math.round(((exitPrice - p.entryPrice)/100) * p.shares * 100) / 100;
+  p.daysHeld   = daysSince(p.entryDate, exitDate);
+  p.outcome    = p.realisedPnl > 0 ? 'WIN' : p.realisedPnl < 0 ? 'LOSS' : 'FLAT';
+
+  closingId = null;
+  document.getElementById('close-modal').style.display = 'none';
+  persist();
+  renderAll();
+}
+
+function deletePos(id) {
+  if (!confirm('Remove this position permanently?')) return;
+  S.positions = S.positions.filter(x => x.id !== id);
+  persist(); renderAll();
+}
+
+function renderClosedTrades() {
+  const tbody = document.getElementById('closed-tbody');
+  const closed = [...S.positions.filter(p => p.status === 'CLOSED')].reverse();
+  if (!closed.length) {
+    tbody.innerHTML = '<tr class="empty-row"><td colspan="9">No closed trades yet</td></tr>';
+    return;
+  }
+  tbody.innerHTML = closed.map(p => {
+    const pnlColor = (p.realisedPnl||0) >= 0 ? '#0f6e56' : '#a32d2d';
+    const retPct = Math.round(((p.realisedPnl||0) / p.cost) * 1000) / 10;
+    const outClass = p.outcome === 'WIN' ? 'pill-win' : p.outcome === 'LOSS' ? 'pill-loss' : 'pill-closed';
+    const reasonLabels = { TARGET:'Target hit', STOP:'Stop loss', STALE:'Stale', STRUCTURAL:'Structural exit', MANUAL:'Manual' };
+    return `<tr>
+      <td title="${p.question}">${p.url ? `<a href="${p.url}" style="color:#185fa5;text-decoration:none">${trunc(p.question,24)}</a>` : trunc(p.question,24)}</td>
+      <td>${p.entryPrice}¢</td>
+      <td>${p.exitPrice}¢</td>
+      <td>$${Math.round(p.cost)}</td>
+      <td style="color:${pnlColor};font-weight:600">${(p.realisedPnl>=0?'+':'')}$${Math.abs(p.realisedPnl||0).toFixed(2)}</td>
+      <td style="color:${pnlColor}">${retPct >= 0 ? '+' : ''}${retPct}%</td>
+      <td>${p.daysHeld || 0}d</td>
+      <td style="font-size:11px;color:#6b6a65">${reasonLabels[p.closeReason] || p.closeReason || '—'}</td>
+      <td><span class="pill ${outClass}">${p.outcome || '—'}</span></td>
+    </tr>`;
+  }).join('');
+}
+
+// ── Scorecard ─────────────────────────────────────────
+function setNT(type, btn) {
+  ntSelected = type;
+  document.querySelectorAll('.nt-btn').forEach(b => {
+    b.style.background = '#faf9f7'; b.style.color = '#6b6a65'; b.style.borderColor = 'rgba(0,0,0,0.15)';
+  });
+  const colors = {
+    SENTIMENT:  { bg:'#faeeda', color:'#633806', border:'#854f0b' },
+    STRUCTURAL: { bg:'#fcebeb', color:'#791f1f', border:'#a32d2d' },
+    UNCLEAR:    { bg:'#f1efe8', color:'#5f5e5a', border:'#888780' }
+  };
+  const c = colors[type];
+  btn.style.background = c.bg; btn.style.color = c.color; btn.style.borderColor = c.border;
+  calcSC();
+}
+
+function calcSC() {
+  const pm   = parseFloat(document.getElementById('sc-pm').value)  || 0;
+  const pre  = parseFloat(document.getElementById('sc-pre').value) || 0;
+  const mf   = parseFloat(document.getElementById('sc-mf').value)  || 0;
+  const ka   = parseFloat(document.getElementById('sc-ka').value)  || 0;
+  const mc   = parseFloat(document.getElementById('sc-mc').value)  || 0;
+  const pr   = parseFloat(document.getElementById('sc-pr').value)  || 0;
+  const vol  = parseFloat(document.getElementById('sc-vol').value) || 0;
+  const conf = parseFloat(document.getElementById('sc-conf').value)|| 0;
+  const cat  = document.getElementById('sc-cat').value;
+
+  if (!pm || !pre) { document.getElementById('sc-verdict').innerHTML = ''; return; }
+
+  const drop = pre - pm;
+  const w = CW[cat];
+  const srcs = { mf, ka, mc, pr };
+  const active = Object.entries(srcs).filter(([k,v]) => v > 0);
+  let fv = 0;
+  if (active.length) {
+    const tw = active.reduce((s,[k]) => s + w[k], 0);
+    fv = active.reduce((s,[k,v]) => s + (w[k]/tw)*v, 0);
+  }
+  const mfGap = mf > 0 ? mf - pm : 0;
+  const kaGap = ka > 0 ? ka - pm : 0;
+  const fvGap = fv > 0 ? fv - pm : 0;
+
+  // Score components
+  const components = [
+    { label: 'News classification',
+      pts: ntSelected === 'SENTIMENT' ? 25 : ntSelected === 'STRUCTURAL' ? -50 : ntSelected === 'UNCLEAR' ? 3 : 0,
+      max: 25 },
+    { label: 'Price drop magnitude',
+      pts: drop >= 20 ? 20 : drop >= 15 ? 13 : drop >= 10 ? 6 : 0,
+      max: 20 },
+    { label: 'Manifold gap',
+      pts: mfGap >= 15 ? 20 : mfGap >= 8 ? 12 : mfGap >= 3 ? 5 : 0,
+      max: 20 },
+    { label: 'Kalshi confirmation',
+      pts: kaGap >= 12 ? 15 : kaGap >= 6 ? 8 : kaGap >= 2 ? 3 : 0,
+      max: 15 },
+    { label: 'Fair value edge',
+      pts: fvGap >= 12 ? 10 : fvGap >= 7 ? 6 : fvGap >= 3 ? 2 : 0,
+      max: 10 },
+    { label: 'Ambient volatility',
+      pts: vol >= 7 ? 10 : vol >= 4 ? 6 : vol >= 2 ? 3 : 0,
+      max: 10 },
+  ];
+
+  const total = components.reduce((s,c) => s + c.pts, 0);
+  let decision, alertClass, alertTitle, alertBody;
+
+  if (ntSelected === 'STRUCTURAL') {
+    decision = 'NO-GO'; alertClass = 'danger';
+    alertTitle = 'Do not trade — structural classification';
+    alertBody = 'The news changes the underlying probability, not just the narrative. Market may be correctly priced. Exit any existing position in this market.';
+  } else if (total >= 55) {
+    decision = 'GO'; alertClass = 'success';
+    alertTitle = 'Strong setup — proceed to Kelly sizer';
+    alertBody = `Score ${total}/100. Multiple signals confirm overcorrection. Use half-Kelly sizing.`;
+  } else if (total >= 35) {
+    decision = 'WEAK GO'; alertClass = 'warning';
+    alertTitle = 'Marginal setup — proceed with caution';
+    alertBody = `Score ${total}/100. One or more signals are weak. If you trade, use quarter-Kelly only.`;
+  } else {
+    decision = 'NO-GO'; alertClass = 'neutral';
+    alertTitle = 'Weak setup — pass';
+    alertBody = `Score ${total}/100. Insufficient evidence of overcorrection. Log this as a NO-GO and move on.`;
+  }
+
+  const scoreRows = components.map(c => {
+    const pct = Math.max(0, Math.min(100, (Math.max(0,c.pts) / c.max) * 100));
+    const color = c.pts >= c.max * 0.75 ? '#0f6e56' : c.pts > 0 ? '#854f0b' : '#a32d2d';
+    return `<div class="score-row">
+      <span class="score-row-label">${c.label}</span>
+      <div class="score-bar-bg"><div class="score-bar-fill" style="width:${pct}%;background:${color}"></div></div>
+      <span class="score-row-pts" style="color:${color}">${c.pts > 0 ? '+' : ''}${c.pts}</span>
+    </div>`;
+  }).join('');
+
+  document.getElementById('sc-verdict').innerHTML = `
+    <div class="alert ${alertClass}" style="margin-top:14px">
+      <div class="alert-title">${decision} — ${alertTitle}</div>
+      <div>${alertBody}</div>
+      ${fv > 0 ? `<div style="margin-top:6px;opacity:.85">Weighted fair value: ${Math.round(fv*10)/10}¢ &nbsp;·&nbsp; Edge: +${Math.round(fvGap*10)/10} pts &nbsp;·&nbsp; Manifold gap: ${mfGap > 0 ? '+'+Math.round(mfGap) : '—'} pts</div>` : ''}
+    </div>
+    <div style="margin-top:10px">
+      <div style="font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:#9c9a92;margin-bottom:6px">Score breakdown</div>
+      <div class="score-rows">${scoreRows}</div>
+      <div style="text-align:right;font-size:12px;font-weight:600;color:#1a1a18;margin-top:8px">Total: ${total} / 100</div>
+    </div>`;
+}
+
+function saveEval() {
+  const q    = document.getElementById('sc-q').value.trim();
+  const url  = document.getElementById('sc-url').value.trim();
+  const pm   = parseFloat(document.getElementById('sc-pm').value);
+  const pre  = parseFloat(document.getElementById('sc-pre').value);
+  const hl   = document.getElementById('sc-headline').value.trim();
+  const mf   = parseFloat(document.getElementById('sc-mf').value)  || 0;
+  const ka   = parseFloat(document.getElementById('sc-ka').value)  || 0;
+  const mc   = parseFloat(document.getElementById('sc-mc').value)  || 0;
+  const pr   = parseFloat(document.getElementById('sc-pr').value)  || 0;
+  const vol  = parseFloat(document.getElementById('sc-vol').value) || 0;
+  const conf = parseFloat(document.getElementById('sc-conf').value)|| 0;
+  const cat  = document.getElementById('sc-cat').value;
+
+  if (!q)  { alert('Market question is required.'); return; }
+  if (!pm) { alert('Current Polymarket price is required.'); return; }
+  if (!pre){ alert('Pre-news price estimate is required.'); return; }
+  if (!ntSelected) { alert('You must classify the news type before saving.'); return; }
+
+  const w = CW[cat];
+  const srcs = { mf, ka, mc, pr };
+  const active = Object.entries(srcs).filter(([k,v]) => v > 0);
+  let fv = 0;
+  if (active.length) {
+    const tw = active.reduce((s,[k]) => s + w[k], 0);
+    fv = active.reduce((s,[k,v]) => s + (w[k]/tw)*v, 0);
+  }
+
+  const drop  = pre - pm;
+  const mfGap = mf > 0 ? Math.round((mf - pm)*10)/10 : null;
+  const kaGap = ka > 0 ? Math.round((ka - pm)*10)/10 : null;
+  const fvGap = fv > 0 ? Math.round((fv - pm)*10)/10 : null;
+
+  // Recalc score
+  const mfG = mfGap || 0, kaG = kaGap || 0, fvG = fvGap || 0;
+  let score = 0;
+  if (ntSelected === 'SENTIMENT') score += 25; else if (ntSelected === 'STRUCTURAL') score -= 50; else score += 3;
+  if (drop >= 20) score += 20; else if (drop >= 15) score += 13; else if (drop >= 10) score += 6;
+  if (mfG >= 15) score += 20; else if (mfG >= 8) score += 12; else if (mfG >= 3) score += 5;
+  if (kaG >= 12) score += 15; else if (kaG >= 6) score += 8; else if (kaG >= 2) score += 3;
+  if (fvG >= 12) score += 10; else if (fvG >= 7) score += 6; else if (fvG >= 3) score += 2;
+  if (vol >= 7) score += 10; else if (vol >= 4) score += 6; else if (vol >= 2) score += 3;
+
+  const decision = ntSelected === 'STRUCTURAL' ? 'NO-GO' : score >= 55 ? 'GO' : score >= 35 ? 'WEAK GO' : 'NO-GO';
+
+  S.evaluations.push({
+    id: Date.now(),
+    ts: new Date().toISOString(),
+    question: q, url, headline: hl,
+    preNews: pre, currentPrice: pm,
+    drop: Math.round(drop*10)/10,
+    newsType: ntSelected,
+    manifold: mf || null, kalshi: ka || null, metaculus: mc || null, prior: pr || null,
+    ambientVol: vol || null, confidence: conf || null,
+    category: cat,
+    fairValue: Math.round(fv*10)/10,
+    mfGap, kaGap, fvGap,
+    score, decision,
+    traded: false
+  });
+
+  persist();
+  renderScorecardLog();
+  renderSCStats();
+  clearSC();
+}
+
+function clearSC() {
+  ['sc-q','sc-url','sc-pm','sc-pre','sc-headline','sc-mf','sc-ka','sc-mc','sc-pr','sc-vol','sc-conf'].forEach(id => {
+    document.getElementById(id).value = '';
+  });
+  document.getElementById('sc-cat').value = 'politics';
+  ntSelected = '';
+  document.querySelectorAll('.nt-btn').forEach(b => {
+    b.style.background = '#faf9f7'; b.style.color = '#6b6a65'; b.style.borderColor = 'rgba(0,0,0,0.15)';
+  });
+  document.getElementById('sc-verdict').innerHTML = '';
+}
+
+function toggleTraded(id) {
+  const e = S.evaluations.find(x => x.id === id);
+  if (e) { e.traded = !e.traded; persist(); renderScorecardLog(); renderSCStats(); }
+}
+
+function deleteEval(id) {
+  if (!confirm('Delete this evaluation record? This affects calibration data.')) return;
+  S.evaluations = S.evaluations.filter(x => x.id !== id);
+  persist(); renderScorecardLog(); renderSCStats();
+}
+
+function renderScorecardLog() {
+  const tbody = document.getElementById('sc-tbody');
+  const evals = [...S.evaluations].reverse();
+  if (!evals.length) {
+    tbody.innerHTML = '<tr class="empty-row"><td colspan="10">No evaluations logged — fill in a candidate above</td></tr>';
+    return;
+  }
+  tbody.innerHTML = evals.map(e => {
+    const date = e.ts.split('T')[0];
+    const time = e.ts.split('T')[1].slice(0,5);
+    const shortQ = trunc(e.question, 22);
+    const ntClass = e.newsType === 'SENTIMENT' ? 'pill-sentiment' : e.newsType === 'STRUCTURAL' ? 'pill-structural' : 'pill-unclear';
+    const decClass = e.decision === 'GO' ? 'pill-go' : e.decision === 'WEAK GO' ? 'pill-weakgo' : 'pill-nogo';
+    const mfGapStr = e.mfGap !== null ? (e.mfGap > 0 ? '+' : '') + e.mfGap + '¢' : '—';
+    const mfColor = e.mfGap && e.mfGap >= 12 ? '#0f6e56' : '#9c9a92';
+    const scoreColor = e.score >= 55 ? '#0f6e56' : e.score >= 35 ? '#854f0b' : '#a32d2d';
+    return `<tr>
+      <td style="white-space:nowrap;color:#9c9a92;font-size:11px">${date}<br>${time}</td>
+      <td title="${e.question}">${e.url ? `<a href="${e.url}" style="color:#185fa5;text-decoration:none">${shortQ}</a>` : shortQ}</td>
+      <td style="color:#a32d2d;font-weight:600">${e.drop > 0 ? '-' : ''}${e.drop}¢</td>
+      <td><span class="pill ${ntClass}">${e.newsType}</span></td>
+      <td style="color:${mfColor};font-weight:600">${mfGapStr}</td>
+      <td>${e.fairValue > 0 ? e.fairValue + '¢' : '—'}</td>
+      <td style="color:${scoreColor};font-weight:600">${e.score}</td>
+      <td><span class="pill ${decClass}">${e.decision}</span></td>
+      <td>
+        <button class="btn sm ${e.traded ? 'success' : ''}" onclick="toggleTraded(${e.id})" style="min-width:70px">
+          ${e.traded ? 'Traded' : 'Mark traded'}
+        </button>
+      </td>
+      <td><button class="btn sm danger" onclick="deleteEval(${e.id})">✕</button></td>
+    </tr>`;
+  }).join('');
+}
+
+function renderSCStats() {
+  const evals = S.evaluations;
+  const total = evals.length;
+  const gos = evals.filter(e => e.decision === 'GO');
+  const traded = evals.filter(e => e.traded);
+  const mfGaps = gos.filter(e => e.mfGap !== null).map(e => e.mfGap);
+  const avgMfGap = mfGaps.length ? Math.round(mfGaps.reduce((s,v) => s+v, 0) / mfGaps.length * 10) / 10 : null;
+
+  setText('stat-total', total);
+  setText('stat-go', gos.length);
+  setText('stat-go-pct', total ? Math.round(gos.length/total*100) + '% of total' : '0% of total');
+  setText('stat-traded', traded.length);
+  setText('stat-pass-pct', (total - traded.length) + ' passed');
+  setText('stat-mfgap', avgMfGap !== null ? '+' + avgMfGap + '¢' : '—');
+}
+
+// ── Helpers ───────────────────────────────────────────
+function today() { return new Date().toISOString().split('T')[0]; }
+function fmt(n) { return Math.round(n).toLocaleString(); }
+function trunc(s, n) { return s.length > n ? s.slice(0,n) + '…' : s; }
+function setText(id, val) { const el = document.getElementById(id); if (el) el.textContent = val; }
+function daysSince(d1, d2) {
+  const a = new Date(d1), b = d2 ? new Date(d2) : new Date();
+  return Math.max(0, Math.round((b - a) / 86400000));
+}
+
+function renderAll() {
+  renderSummary();
+  renderOpenPositions();
+  renderClosedTrades();
+  renderScorecardLog();
+  renderSCStats();
+}
+
+// ── Init ──────────────────────────────────────────────
+document.getElementById('pos-date').value = today();
+loadState();
+</script>
+</body>
+</html>

@@ -1,0 +1,15 @@
+[
+  {
+    "id":           "example-market-1",
+    "question":     "Will policy X pass before June?",
+    "url":          "https://polymarket.com/event/will-policy-x-pass",
+    "token_id":     "REPLACE_WITH_REAL_TOKEN_ID",
+    "entry_date":   "2025-03-18",
+    "entry_price":  30.0,
+    "target_exit":  43.0,
+    "stop_loss":    22.0,
+    "cost_usdc":    250.0,
+    "status":       "OPEN",
+    "alerted":      []
+  }
+]
