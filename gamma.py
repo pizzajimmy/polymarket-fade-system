@@ -99,8 +99,9 @@ def _infer_category(question: str) -> str:
                              "blockchain", "solana", "xrp", "coinbase"]):
         return "crypto"
     if any(w in q for w in ["fed", "inflation", "gdp", "rate", "recession", "cpi",
-                             "fomc", "interest rate", "tariff", "unemployment",
-                             "treasury", "central bank"]):
+                            "fomc", "interest rate", "tariff", "unemployment",
+                            "treasury", "central bank", "crude", "oil", "barrel",
+                            "opec", "brent", "wti", "natural gas"]):
         return "macro"
     if any(w in q for w in ["fda", "drug", "trial", "cancer", "vaccine", "clinical",
                              "approval", "phase", "biotech", "medicine"]):
@@ -151,6 +152,12 @@ def fetch_all_active_markets() -> Iterator[dict]:
 
         if not raw:
             break
+
+        if offset == 0 and raw:
+            sample = raw[0]
+            log.info(f"API sample — outcomePrices: {sample.get('outcomePrices')} "
+                     f"active: {sample.get('active')} "
+                     f"conditionId: {str(sample.get('conditionId', ''))[:16]}")
 
         batch = [_parse_market(m) for m in raw]
         batch = [m for m in batch if m]    # filter None
