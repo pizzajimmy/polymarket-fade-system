@@ -44,8 +44,12 @@ def _parse_market(m: dict) -> dict | None:
     Returns None if the market is unusable (no price, already closed, etc).
     """
     try:
-        # outcomePrices is ["0.38","0.62"] for binary markets
+        # outcomePrices can arrive as a real list ["0.38","0.62"]
+        # OR as a JSON string "[\"0.38\",\"0.62\"]" — handle both
         outcome_prices = m.get("outcomePrices", [])
+        if isinstance(outcome_prices, str):
+            import json as _json
+            outcome_prices = _json.loads(outcome_prices)
         if not outcome_prices:
             return None
 
@@ -55,12 +59,18 @@ def _parse_market(m: dict) -> dict | None:
         if yes_price < 1 or yes_price > 99:
             return None
 
-        # clobTokenIds: [yes_token, no_token]
+        # clobTokenIds: [yes_token, no_token] — may also arrive as a JSON string
         token_ids = m.get("clobTokenIds", [])
+        if isinstance(token_ids, str):
+            import json as _json
+            token_ids = _json.loads(token_ids)
         token_id_yes = token_ids[0] if token_ids else ""
 
         slug = m.get("slug", "")
         url  = f"https://polymarket.com/event/{slug}" if slug else ""
+
+        # volume field was renamed from volume24hr to volume in the Gamma API
+        volume = float(m.get("volume24hr") or m.get("volume") or 0)
 
         return {
             "condition_id":  m.get("conditionId", ""),
@@ -69,13 +79,13 @@ def _parse_market(m: dict) -> dict | None:
             "url":           url,
             "token_id_yes":  token_id_yes,
             "yes_price":     round(yes_price, 2),
-            "volume_24h":    float(m.get("volume24hr", 0) or 0),
+            "volume_24h":    volume,
             "liquidity":     float(m.get("liquidity", 0) or 0),
             "end_date":      m.get("endDate", ""),
             "category":      _infer_category(m.get("question", "")),
         }
-    except (ValueError, TypeError, IndexError) as e:
-        log.debug(f"Skipping market {m.get('conditionId','?')}: {e}")
+    except Exception as e:
+        log.warning(f"Skipping market {m.get('conditionId','?')[:16]}: {type(e).__name__}: {e}")
         return None
 
 
@@ -109,12 +119,12 @@ def fetch_all_active_markets() -> Iterator[dict]:
 
     while True:
         params = {
-            "active":  "true",
-            "closed":  "false",
-            "limit":   PAGE_SIZE,
-            "offset":  offset,
-            "order":   "volume24hr",
-            "ascending": "false",   # highest volume first — most likely to have price history
+            "active":    "true",
+            "closed":    "false",
+            "limit":     PAGE_SIZE,
+            "offset":    offset,
+            "order":     "volume",
+            "ascending": "false",   # highest volume first
         }
         raw = _get("/markets", params)
 
