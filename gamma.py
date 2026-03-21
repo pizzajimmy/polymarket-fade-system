@@ -95,16 +95,37 @@ def _infer_category(question: str) -> str:
     Used to apply the right source-reliability weights later.
     """
     q = question.lower()
-    if any(w in q for w in ["bitcoin", "btc", "eth", "crypto", "token", "defi", "blockchain"]):
+    if any(w in q for w in ["bitcoin", "btc", "eth", "crypto", "token", "defi",
+                             "blockchain", "solana", "xrp", "coinbase"]):
         return "crypto"
-    if any(w in q for w in ["fed", "inflation", "gdp", "rate", "recession", "cpi", "fomc"]):
+    if any(w in q for w in ["fed", "inflation", "gdp", "rate", "recession", "cpi",
+                             "fomc", "interest rate", "tariff", "unemployment",
+                             "treasury", "central bank"]):
         return "macro"
-    if any(w in q for w in ["fda", "drug", "trial", "cancer", "vaccine", "clinical"]):
+    if any(w in q for w in ["fda", "drug", "trial", "cancer", "vaccine", "clinical",
+                             "approval", "phase", "biotech", "medicine"]):
         return "science"
-    if any(w in q for w in ["nba", "nfl", "nhl", "mlb", "world cup", "premier league",
-                             "championship", "playoff", "oscar", "grammy"]):
+    if any(w in q for w in [
+        # Traditional sports
+        "nba", "nfl", "nhl", "mlb", "nascar", "mls", "pga", "ufc", "wwe",
+        "world cup", "premier league", "la liga", "bundesliga", "serie a",
+        "champions league", "europa league", "championship", "playoff",
+        "super bowl", "world series", "stanley cup", "march madness",
+        "oscar", "grammy", "emmy", "golden globe", "bafta",
+        # Match result patterns
+        " vs ", " vs. ", "o/u ", "over/under", "spread:", "moneyline",
+        "match winner", "first half", "both teams to score",
+        # Esports
+        "esports", "counter-strike", "valorant", "league of legends", "dota",
+        "overwatch", "fortnite", "bo3", "bo5", "cct ", "esl ", "blast ",
+        # Generic sports terms
+        "tournament", "fixture", "match", "game winner", "set winner",
+        "fc ", " fc", "united", "city fc", "athletic club", "sporting ",
+        "coach", "manager", "transfer", "draft pick", "mvp", "award",
+        "season wins", "leading scorer", "top scorer",
+    ]):
         return "sports"
-    return "politics"   # default — largest category
+    return "politics"
 
 
 # ── Public interface ──────────────────────────────────────────────────────────

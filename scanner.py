@@ -32,11 +32,16 @@ TG_CHAT   = os.environ.get("TG_CHAT_ID", "")
 DROP_THRESHOLD      = float(os.environ.get("DROP_THRESHOLD", "15"))     # points
 MIN_LIQUIDITY       = float(os.environ.get("MIN_LIQUIDITY", "1000"))    # USDC
 MIN_VOLUME_24H      = float(os.environ.get("MIN_VOLUME_24H", "500"))    # USDC
+MIN_DAYS_TO_RES     = int(os.environ.get("MIN_DAYS_TO_RESOLUTION", "7"))# days — filters event-driven markets
 AMBIENT_VOL_HIGH    = float(os.environ.get("AMBIENT_VOL_HIGH", "5"))    # pts/day
 VOLUME_SPIKE_RATIO  = float(os.environ.get("VOLUME_SPIKE_RATIO", "1.8"))
 ALERT_COOLDOWN_HRS  = int(os.environ.get("ALERT_COOLDOWN_HRS", "12"))   # hours
 POLL_INTERVAL       = int(os.environ.get("POLL_INTERVAL_SECS", "1800")) # 30 min
 PRUNE_DAYS          = int(os.environ.get("PRUNE_DAYS", "90"))           # keep 90 days
+
+# Categories eligible for fade trading — sports has too many event-driven markets
+# that look high-vol but are just pre-resolution binary outcomes
+TRADEABLE_CATEGORIES = {"politics", "macro", "science", "crypto"}
 
 logging.basicConfig(
     level=logging.INFO,
@@ -107,12 +112,36 @@ def format_ambient_alert(market: dict, ambient_vol: float) -> str:
 
 # ── Core scan ─────────────────────────────────────────────────────────────────
 
+def _days_to_resolution(end_date_str: str) -> int | None:
+    """Return days until market resolves, or None if no end date."""
+    if not end_date_str:
+        return None
+    try:
+        end = datetime.fromisoformat(end_date_str.replace("Z", "+00:00"))
+        delta = end.replace(tzinfo=None) - datetime.utcnow()
+        return max(0, delta.days)
+    except Exception:
+        return None
+
+
 def _is_tradeable(market: dict) -> bool:
-    """Basic filter — skip illiquid / tiny markets."""
-    return (
-        market["liquidity"] >= MIN_LIQUIDITY
-        and market["volume_24h"] >= MIN_VOLUME_24H
-    )
+    """
+    Filter markets worth analysing for fade setups.
+    Excludes: illiquid, low-volume, sports fixtures, near-expiry event markets.
+    """
+    if market["liquidity"] < MIN_LIQUIDITY:
+        return False
+    if market["volume_24h"] < MIN_VOLUME_24H:
+        return False
+    # Skip sports — dominated by event-driven fixtures that look high-vol
+    # but are just pre-resolution binaries, not narrative overcorrections
+    if market.get("category") not in TRADEABLE_CATEGORIES:
+        return False
+    # Skip markets resolving in < 7 days — too short for fade recovery
+    days = _days_to_resolution(market.get("end_date", ""))
+    if days is not None and days < MIN_DAYS_TO_RES:
+        return False
+    return True
 
 
 def analyse_market(market: dict) -> dict:
