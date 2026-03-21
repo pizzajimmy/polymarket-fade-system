@@ -39,9 +39,13 @@ ALERT_COOLDOWN_HRS  = int(os.environ.get("ALERT_COOLDOWN_HRS", "12"))   # hours
 POLL_INTERVAL       = int(os.environ.get("POLL_INTERVAL_SECS", "1800")) # 30 min
 PRUNE_DAYS          = int(os.environ.get("PRUNE_DAYS", "90"))           # keep 90 days
 
-# Categories eligible for fade trading — sports has too many event-driven markets
-# that look high-vol but are just pre-resolution binary outcomes
-TRADEABLE_CATEGORIES = {"politics", "macro", "science", "crypto"}
+# Fixture patterns — short-lived event markets that look high-vol
+# but are just pre-resolution binaries, not narrative overcorrections
+FIXTURE_KEYWORDS = [
+    " vs ", " vs. ", "o/u ", "over/under", "spread:",
+    "both teams to score", "first half", "map 1", "map 2",
+    "odd/even", "moneyline", "correct score", "next goal",
+]
 
 logging.basicConfig(
     level=logging.INFO,
@@ -127,15 +131,17 @@ def _days_to_resolution(end_date_str: str) -> int | None:
 def _is_tradeable(market: dict) -> bool:
     """
     Filter markets worth analysing for fade setups.
-    Excludes: illiquid, low-volume, sports fixtures, near-expiry event markets.
+    Excludes: illiquid, low-volume, match fixtures, near-expiry markets.
+    Long-dated sports markets (season outcomes, awards) are included.
     """
     if market["liquidity"] < MIN_LIQUIDITY:
         return False
     if market["volume_24h"] < MIN_VOLUME_24H:
         return False
-    # Skip sports — dominated by event-driven fixtures that look high-vol
-    # but are just pre-resolution binaries, not narrative overcorrections
-    if market.get("category") not in TRADEABLE_CATEGORIES:
+    # Skip short-lived match fixtures — high ambient vol from binary resolution,
+    # not narrative overcorrection
+    q = market.get("question", "").lower()
+    if any(kw in q for kw in FIXTURE_KEYWORDS):
         return False
     # Skip markets resolving in < 7 days — too short for fade recovery
     days = _days_to_resolution(market.get("end_date", ""))

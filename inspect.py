@@ -125,24 +125,93 @@ def cmd_drops(days: int = 7):
     print(f"\n{len(rows)} alerts total\n")
 
 
-def cmd_top_vol(limit: int = 20):
-    with db.conn() as c:
-        markets = c.execute("SELECT condition_id, question, category FROM markets").fetchall()
+def cmd_top_vol(limit=20, min_days=7, min_liquidity=500):
+    """
+    Show markets by ambient volatility, filtered to tradeable candidates only.
+    Excludes: sports, near-expiry (<7 days), low liquidity.
+    """
+    from datetime import datetime, timezone
+    limit        = int(limit)
+    min_days     = int(min_days)
+    min_liquidity = float(min_liquidity)
 
+    # All categories tradeable — days-to-resolution filter handles
+    # short-lived fixtures. Pure esports/gaming still excluded.
+    EXCLUDED = {"esports", "gaming"}
+
+    with db.conn() as c:
+        markets = c.execute(
+            "SELECT condition_id, question, category, end_date FROM markets"
+        ).fetchall()
+
+    # Pre-fetch latest liquidity for each market from price_history
+    with db.conn() as c:
+        liq_rows = c.execute("""
+            SELECT p.condition_id, p.liquidity
+            FROM price_history p
+            INNER JOIN (
+                SELECT condition_id, MAX(polled_at) AS latest
+                FROM price_history GROUP BY condition_id
+            ) latest ON p.condition_id = latest.condition_id
+                     AND p.polled_at = latest.latest
+            WHERE p.liquidity IS NOT NULL
+        """).fetchall()
+    liquidity_map = {r["condition_id"]: r["liquidity"] for r in liq_rows}
+
+    skipped_sports    = 0
+    skipped_expiry    = 0
+    skipped_liquidity = 0
     results = []
+
     for m in markets:
+        cat = m["category"] or "politics"
+
+        # Filter pure esports/gaming (no category for these yet — caught by keyword)
+        q_lower = m["question"].lower() if m["question"] else ""
+        is_fixture = any(x in q_lower for x in [
+            " vs ", " vs. ", "o/u ", "over/under", "spread:",
+            "both teams to score", "first half", "map 1", "map 2",
+            "odd/even", "moneyline", "correct score",
+        ])
+        if is_fixture:
+            skipped_sports += 1
+            continue
+
+        # Filter near-expiry
+        end = m["end_date"] or ""
+        if end:
+            try:
+                end_dt = datetime.fromisoformat(end.replace("Z", "+00:00"))
+                days_left = (end_dt.replace(tzinfo=None) - datetime.now(timezone.utc).replace(tzinfo=None)).days
+                if days_left < min_days:
+                    skipped_expiry += 1
+                    continue
+            except Exception:
+                pass
+
+        # Filter low liquidity
+        liq = liquidity_map.get(m["condition_id"], 0)
+        if liq < min_liquidity:
+            skipped_liquidity += 1
+            continue
+
         av = db.ambient_volatility(m["condition_id"], days=30)
-        if av is not None:
-            results.append((av, m["category"], m["question"][:60], m["condition_id"]))
+        if av is not None and av > 0:
+            results.append((av, cat, liq, m["question"][:65], m["condition_id"]))
 
     results.sort(reverse=True)
 
-    print(f"\n{'AMB VOL':>8}  {'CATEGORY':<12}  QUESTION")
-    print("─" * 80)
-    for av, cat, q, cid in results[:limit]:
+    print(f"\n{'AMB VOL':>8}  {'CATEGORY':<10}  {'LIQUIDITY':>10}  QUESTION")
+    print("─" * 90)
+    for av, cat, liq, q, cid in results[:limit]:
         flag = " ← HIGH RETAIL" if av >= 5 else ""
-        print(f"{av:>7.1f}¢  {cat:<12}  {q}{flag}")
-    print(f"\nTop {min(limit, len(results))} markets by ambient volatility\n")
+        liq_str = f"${liq:,.0f}"
+        print(f"{av:>7.1f}¢  {cat:<10}  {liq_str:>10}  {q}{flag}")
+
+    print(f"\nTop {min(limit, len(results))} tradeable markets by ambient vol")
+    print(f"Filtered out: {skipped_sports} sports/esports, "
+          f"{skipped_expiry} near-expiry (<{min_days}d), "
+          f"{skipped_liquidity} low-liquidity (<${min_liquidity:,.0f})\n")
 
 
 def cmd_stats():
