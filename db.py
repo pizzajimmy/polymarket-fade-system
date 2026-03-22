@@ -185,7 +185,56 @@ def volume_spike(condition_id: str, current_volume: float,
     avg = sum(r["volume_24h"] for r in rows) / len(rows)
     return round(current_volume / avg, 2) if avg > 0 else 1.0
 
+# db.py — find markets stuck near 0 or 100 that haven't resolved
+def stale_extreme_markets(min_days_at_extreme: int = 2,
+                          extreme_threshold: float = 10.0,
+                          min_liquidity: float = 500) -> list[dict]:
+    """
+    Find markets where price has been near 0 or 100 for N days
+    but the market hasn't officially resolved yet.
+    These are NO-buy (price near 100 = YES certain)
+    or YES-buy (price near 0 = NO certain) opportunities.
+    """
+    cutoff = (datetime.utcnow() - timedelta(days=min_days_at_extreme)).isoformat()
+    with conn() as c:
+        rows = c.execute("""
+            SELECT m.condition_id, m.question, m.url, m.end_date,
+                   m.category, p.price, p.liquidity
+            FROM markets m
+            JOIN price_history p ON p.condition_id = m.condition_id
+            WHERE p.polled_at = (
+                SELECT MAX(polled_at) FROM price_history
+                WHERE condition_id = m.condition_id
+            )
+            AND (p.price <= ? OR p.price >= ?)
+            AND p.liquidity >= ?
+            AND m.end_date > datetime('now')
+        """, (extreme_threshold, 100 - extreme_threshold, min_liquidity)
+        ).fetchall()
 
+        results = []
+        for row in rows:
+            # Confirm it's been at this extreme for N days, not just arrived
+            history = c.execute("""
+                SELECT MIN(price) as min_p, MAX(price) as max_p
+                FROM price_history
+                WHERE condition_id = ? AND polled_at >= ?
+            """, (row["condition_id"], cutoff)).fetchone()
+
+            if not history:
+                continue
+
+            # All readings in the window should be extreme
+            if row["price"] <= extreme_threshold:
+                if history["max_p"] <= extreme_threshold + 5:
+                    results.append(dict(row) | {"signal": "BUY_NO",
+                                                "edge_pts": 100 - row["price"]})
+            elif row["price"] >= (100 - extreme_threshold):
+                if history["min_p"] >= (100 - extreme_threshold) - 5:
+                    results.append(dict(row) | {"signal": "BUY_YES",
+                                                "edge_pts": row["price"]})
+
+        return sorted(results, key=lambda x: x["edge_pts"], reverse=True)
 # ── Ambient volatility ────────────────────────────────────────────────────────
 
 def ambient_volatility(condition_id: str, days: int = 30) -> float | None:

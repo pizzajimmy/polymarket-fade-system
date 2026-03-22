@@ -99,6 +99,7 @@ def format_drop_alert(market: dict, drop: float, ambient_vol: float | None,
     )
 
 
+
 def format_ambient_alert(market: dict, ambient_vol: float) -> str:
     q = market["question"][:90] + ("…" if len(market["question"]) > 90 else "")
     url = market.get("url", "")
@@ -327,6 +328,19 @@ def main():
         import json
         print(json.dumps(summary["drop_markets"], indent=2))
         return
+
+    if args.lag:
+        from db import stale_extreme_markets
+        candidates = stale_extreme_markets()
+        print(f"\n{'SIGNAL':<9}  {'PRICE':>7}  {'EDGE':>6}  "
+              f"{'LIQUIDITY':>10}  QUESTION")
+        print("─" * 85)
+        for m in candidates:
+            print(f"{m['signal']:<9}  {m['price']:>6.1f}¢  "
+                  f"{m['edge_pts']:>5.1f}¢  "
+                  f"${m['liquidity']:>9,.0f}  "
+                  f"{m['question'][:50]}")
+        print(f"\n{len(candidates)} stale extreme markets found\n")
 
     if args.loop:
         log.info(f"Starting continuous scanner (interval: {POLL_INTERVAL}s)…")
