@@ -208,20 +208,33 @@ def stale_extreme_markets(min_days_at_extreme: int = 2,
             )
             AND (p.price <= ? OR p.price >= ?)
             AND p.liquidity >= ?
-            AND m.end_date > datetime('now')
+            AND m.end_date > datetime('now', '+14 days')
         """, (extreme_threshold, 100 - extreme_threshold, min_liquidity)
         ).fetchall()
 
         results = []
         for row in rows:
-            # Confirm it's been at this extreme for N days, not just arrived
             history = c.execute("""
-                SELECT MIN(price) as min_p, MAX(price) as max_p
+                SELECT MIN(price) as min_p, MAX(price) as max_p,
+                       MIN(polled_at) as oldest, COUNT(*) as reading_count
                 FROM price_history
                 WHERE condition_id = ? AND polled_at >= ?
             """, (row["condition_id"], cutoff)).fetchone()
 
-            if not history:
+            if not history or not history["min_p"]:
+                continue
+
+            # Must have readings spanning at least N days
+            # (not just 2 readings from yesterday)
+            if history["oldest"] is None:
+                continue
+            oldest_dt = datetime.fromisoformat(history["oldest"])
+            span_days = (datetime.utcnow() - oldest_dt).days
+            if span_days < min_days_at_extreme:
+                continue
+
+            # Must have at least 4 readings (avoids single-reading flukes)
+            if history["reading_count"] < 4:
                 continue
 
             # All readings in the window should be extreme
@@ -233,7 +246,16 @@ def stale_extreme_markets(min_days_at_extreme: int = 2,
                 if history["min_p"] >= (100 - extreme_threshold) - 5:
                     results.append(dict(row) | {"signal": "BUY_YES",
                                                 "edge_pts": row["price"]})
+        FIXTURE_KEYWORDS = [
+            " vs ", " vs. ", "o/u ", "over/under", "spread:",
+            "both teams to score", "first half", "map 1", "map 2",
+            "odd/even", "moneyline", "correct score",
+        ]
 
+        results = [
+            r for r in results
+            if not any(kw in r["question"].lower() for kw in FIXTURE_KEYWORDS)
+        ]
         return sorted(results, key=lambda x: x["edge_pts"], reverse=True)
 # ── Ambient volatility ────────────────────────────────────────────────────────
 

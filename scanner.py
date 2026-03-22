@@ -333,7 +333,11 @@ def main():
 
     if args.lag:
         from db import stale_extreme_markets
-        candidates = stale_extreme_markets()
+        candidates = stale_extreme_markets(
+            min_days_at_extreme=7,
+            min_liquidity=2000,
+            extreme_threshold=5.0
+        )
         print(f"\n{'SIGNAL':<9}  {'PRICE':>7}  {'EDGE':>6}  "
               f"{'LIQUIDITY':>10}  QUESTION")
         print("─" * 85)
