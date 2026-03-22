@@ -304,6 +304,8 @@ def run_scan(dry_run: bool = False) -> dict:
 def main():
     parser = argparse.ArgumentParser(description="Polymarket market scanner")
     parser.add_argument("--loop",    action="store_true", help="Run continuously")
+    parser.add_argument("--lag", action="store_true",
+                        help="Find stale extreme markets (NO-buy opportunities)")
     parser.add_argument("--dry-run", action="store_true", help="Analyse only, no Telegram")
     parser.add_argument("--stats",   action="store_true", help="Print DB stats and exit")
     parser.add_argument("--prune",   action="store_true", help="Prune old readings and exit")
