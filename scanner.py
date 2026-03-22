@@ -28,7 +28,7 @@ from gamma import fetch_all_active_markets
 
 TG_TOKEN  = os.environ.get("TG_TOKEN", "")
 TG_CHAT   = os.environ.get("TG_CHAT_ID", "")
-
+SPIKE_THRESHOLD = float(os.environ.get("SPIKE_THRESHOLD", "15"))   # points up
 DROP_THRESHOLD      = float(os.environ.get("DROP_THRESHOLD", "15"))     # points
 MIN_LIQUIDITY       = float(os.environ.get("MIN_LIQUIDITY", "1000"))    # USDC
 MIN_VOLUME_24H      = float(os.environ.get("MIN_VOLUME_24H", "500"))    # USDC
@@ -75,7 +75,25 @@ def send_telegram(message: str) -> bool:
         log.error(f"Telegram failed: {e}")
         return False
 
-
+def format_spike_alert(market, rise, ambient_vol, vol_spike, prev_price):
+    q = market["question"][:90] + ("…" if len(market["question"]) > 90 else "")
+    cat = market.get("category", "unknown")
+    url = market.get("url", "")
+    url_tag = f'\n<a href="{url}">Open on Polymarket</a>' if url else ""
+    amb_str = ""
+    if ambient_vol:
+        amb_flag = " ⚠ HIGH RETAIL VOL" if ambient_vol >= AMBIENT_VOL_HIGH else ""
+        amb_str = f"\nAmbient vol: {ambient_vol:.1f} pts/day{amb_flag}"
+    return (
+        f"📈 <b>Price spike alert — {cat}</b>\n"
+        f"<i>{q}</i>\n\n"
+        f"Spike:   <b>{prev_price:.1f}¢ → {market['yes_price']:.1f}¢  (+{rise:.1f} pts)</b>\n"
+        f"Volume:  ${market['volume_24h']:,.0f} 24h  {vol_spike:.1f}× avg volume\n"
+        f"Liquidity: ${market['liquidity']:,.0f}\n"
+        f"<i>Consider buying NO if spike is sentiment-driven speculation.</i>"
+        f"{amb_str}"
+        f"{url_tag}"
+    )
 def format_drop_alert(market: dict, drop: float, ambient_vol: float | None,
                       vol_spike: float, prev_price: float) -> str:
     q = market["question"][:90] + ("…" if len(market["question"]) > 90 else "")
@@ -170,7 +188,12 @@ def analyse_market(market: dict) -> dict:
     drop = (prev_price - price) if prev_price else 0
 
     alert_types = []
+    rise = (price - prev_price) if prev_price else 0
 
+    if (prev_price is not None
+            and rise >= SPIKE_THRESHOLD
+            and vol_spike_r >= VOLUME_SPIKE_RATIO):
+        alert_types.append("SPIKE")
     # Drop alert: 15+ points down in 24h, with volume confirmation
     if (prev_price is not None
             and drop >= DROP_THRESHOLD
@@ -183,19 +206,16 @@ def analyse_market(market: dict) -> dict:
         alert_types.append("DROP")
 
     # Ambient vol alert: first time we see a high-vol market (once per day)
-    if (ambient_vol is not None
-            and ambient_vol >= AMBIENT_VOL_HIGH
-            and db.alert_cooldown_passed(cid, "AMBIENT_HIGH", cooldown_hours=24)):
-        alert_types.append("AMBIENT_HIGH")
 
     return {
-        "condition_id":  cid,
-        "price":         price,
-        "prev_price":    prev_price,
-        "drop":          round(drop, 2),
-        "ambient_vol":   ambient_vol,
-        "vol_spike":     vol_spike_r,
-        "alert_types":   alert_types,
+        "condition_id": cid,
+        "price": price,
+        "prev_price": prev_price,
+        "drop": round(drop, 2),
+        "rise": round(rise, 2),  # ← add this
+        "ambient_vol": ambient_vol,
+        "vol_spike": vol_spike_r,
+        "alert_types": alert_types,
     }
 
 
@@ -266,9 +286,14 @@ def run_scan(dry_run: bool = False) -> dict:
                     "vol_spike":   analysis["vol_spike"],
                     "category":    market.get("category", ""),
                 })
-
-            elif alert_type == "AMBIENT_HIGH":
-                msg = format_ambient_alert(market, analysis["ambient_vol"])
+            elif alert_type == "SPIKE":
+                msg = format_spike_alert(
+                    market,
+                    analysis["rise"],  # need to add this to the return dict too
+                    analysis["ambient_vol"],
+                    analysis["vol_spike"],
+                    analysis["prev_price"],
+                )
 
             if not dry_run:
                 if send_telegram(msg):
@@ -347,6 +372,7 @@ def main():
                   f"${m['liquidity']:>9,.0f}  "
                   f"{m['question'][:50]}")
         print(f"\n{len(candidates)} stale extreme markets found\n")
+        return  # ← add this
 
     if args.loop:
         log.info(f"Starting continuous scanner (interval: {POLL_INTERVAL}s)…")
