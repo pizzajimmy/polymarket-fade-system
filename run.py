@@ -7,6 +7,8 @@ Threads:
 """
 
 import threading
+import subprocess
+import sys
 import time
 import os
 
@@ -17,8 +19,29 @@ try:
 except ImportError:
     pass
 
-from scanner   import run_scanner
-from alert_bot import run_alert_bot
+from scanner import run_scan, POLL_INTERVAL
+
+
+def run_scanner():
+    """Loop wrapper for run_scan so it behaves like a long-running thread."""
+    while True:
+        try:
+            run_scan()
+        except Exception as e:
+            print(f"[scanner] scan error: {e}")
+        time.sleep(POLL_INTERVAL)
+
+
+def run_alert_bot():
+    """Run alert_bot.py as a subprocess — avoids import name dependency."""
+    while True:
+        try:
+            subprocess.run([sys.executable, "alert_bot.py"], check=True)
+        except subprocess.CalledProcessError as e:
+            print(f"[alert_bot] exited with code {e.returncode} — restarting in 30s")
+        except Exception as e:
+            print(f"[alert_bot] error: {e} — restarting in 30s")
+        time.sleep(30)
 
 
 def run_thread(name: str, fn):

@@ -16,7 +16,12 @@ import argparse
 import requests
 from datetime import date, datetime
 from pathlib import Path
-
+from pathlib import Path
+if Path(".env").exists():
+    for line in Path(".env").read_text().splitlines():
+        if "=" in line and not line.startswith("#"):
+            k, v = line.split("=", 1)
+            os.environ.setdefault(k.strip(), v.strip())
 # ── Config ────────────────────────────────────────────────────────────────────
 
 TG_TOKEN  = os.environ.get("TG_TOKEN", "")
