@@ -19,6 +19,7 @@ try:
 except ImportError:
     pass
 
+import db
 from scanner import run_scan, POLL_INTERVAL
 
 
@@ -62,6 +63,10 @@ def run_thread(name: str, fn):
 if __name__ == "__main__":
     print("[run] Polymarket fade system starting")
     print(f"[run] Live alerts → chat {os.getenv('TG_CHAT_ID', 'NOT SET')}")
+
+    # Initialise DB before any thread touches it
+    db.init_db()
+    print("[run] Database initialised")
 
     threads = [
         run_thread("scanner",   run_scanner),
