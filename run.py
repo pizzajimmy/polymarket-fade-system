@@ -1,77 +1,54 @@
 """
-run.py — production entrypoint
-================================
-Starts the market scanner and price alert bot as parallel threads
-so they share the same SQLite database file.
+run.py — Production entrypoint.
 
-Used by Railway (or any single-container deployment).
-Start command: python run.py
-
-For local development, run each script individually instead:
-  python scanner.py --loop
-  python alert_bot.py --loop
+Threads:
+  1. scanner    — scans Gamma every cycle, fires live alerts to TG_CHAT_ID
+  2. alert_bot  — monitors positions.json hourly via CLOB API
 """
 
 import threading
-import logging
-import sys
+import time
 import os
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s  %(name)-14s  %(levelname)-7s  %(message)s",
-    datefmt="%Y-%m-%d %H:%M:%S",
-)
-log = logging.getLogger("run")
+# Load .env if present (local dev)
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass
+
+from scanner   import run_scanner
+from alert_bot import run_alert_bot
 
 
-def run_scanner():
-    try:
-        import db
-        from scanner import run_scan
-        import time
-        interval = int(os.environ.get("POLL_INTERVAL_SECS", "1800"))
-        db.init_db()
-        log.info(f"Scanner started (interval: {interval}s)")
+def run_thread(name: str, fn):
+    """Wrap a loop function in a daemon thread with crash-restart."""
+    def wrapper():
         while True:
             try:
-                run_scan()
+                print(f"[{name}] Starting")
+                fn()
             except Exception as e:
-                log.error(f"Scanner error: {e}", exc_info=True)
-            time.sleep(interval)
-    except Exception as e:
-        log.critical(f"Scanner thread crashed: {e}", exc_info=True)
-
-
-def run_alertbot():
-    try:
-        from alert_bot import run_loop
-        import time
-        # Small delay so scanner initialises the DB first
-        time.sleep(5)
-        log.info("Alert bot started")
-        run_loop()
-    except Exception as e:
-        log.critical(f"Alert bot thread crashed: {e}", exc_info=True)
+                print(f"[{name}] CRASHED: {e} — restarting in 30s")
+                time.sleep(30)
+    t = threading.Thread(target=wrapper, name=name, daemon=True)
+    t.start()
+    return t
 
 
 if __name__ == "__main__":
-    log.info("Starting Polymarket Fade System…")
+    print("[run] Polymarket fade system starting")
+    print(f"[run] Live alerts → chat {os.getenv('TG_CHAT_ID', 'NOT SET')}")
 
-    scanner_thread = threading.Thread(
-        target=run_scanner, name="scanner", daemon=True
-    )
-    alertbot_thread = threading.Thread(
-        target=run_alertbot, name="alertbot", daemon=True
-    )
+    threads = [
+        run_thread("scanner",   run_scanner),
+        run_thread("alert_bot", run_alert_bot),
+    ]
 
-    scanner_thread.start()
-    alertbot_thread.start()
-
-    # Keep main thread alive — if either child crashes, log it
-    try:
-        scanner_thread.join()
-        alertbot_thread.join()
-    except KeyboardInterrupt:
-        log.info("Shutting down.")
-        sys.exit(0)
+    # Keep main thread alive
+    while True:
+        alive = [t.name for t in threads if t.is_alive()]
+        dead  = [t.name for t in threads if not t.is_alive()]
+        if dead:
+            print(f"[run] WARNING — dead threads: {dead}")
+        time.sleep(300)

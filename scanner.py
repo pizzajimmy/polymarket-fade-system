@@ -20,6 +20,7 @@ import argparse
 import requests
 from datetime import datetime
 from pathlib import Path
+from sheets import log_drop_alert, log_spike_alert
 
 import db
 from gamma import fetch_all_active_markets
@@ -94,6 +95,7 @@ def format_spike_alert(market, rise, ambient_vol, vol_spike, prev_price):
         f"{amb_str}"
         f"{url_tag}"
     )
+
 def format_drop_alert(market: dict, drop: float, ambient_vol: float | None,
                       vol_spike: float, prev_price: float) -> str:
     q = market["question"][:90] + ("…" if len(market["question"]) > 90 else "")
@@ -115,7 +117,6 @@ def format_drop_alert(market: dict, drop: float, ambient_vol: float | None,
         f"{amb_str}"
         f"{url_tag}"
     )
-
 
 
 def format_ambient_alert(market: dict, ambient_vol: float) -> str:
@@ -186,14 +187,15 @@ def analyse_market(market: dict) -> dict:
     vol_spike_r  = db.volume_spike(cid, vol_24h) if vol_24h else 1.0
 
     drop = (prev_price - price) if prev_price else 0
+    rise = (price - prev_price) if prev_price else 0
 
     alert_types = []
-    rise = (price - prev_price) if prev_price else 0
 
     if (prev_price is not None
             and rise >= SPIKE_THRESHOLD
             and vol_spike_r >= VOLUME_SPIKE_RATIO):
         alert_types.append("SPIKE")
+
     # Drop alert: 15+ points down in 24h, with volume confirmation
     if (prev_price is not None
             and drop >= DROP_THRESHOLD
@@ -205,17 +207,15 @@ def analyse_market(market: dict) -> dict:
           and drop >= DROP_THRESHOLD + 5):    # require larger drop if no vol spike
         alert_types.append("DROP")
 
-    # Ambient vol alert: first time we see a high-vol market (once per day)
-
     return {
         "condition_id": cid,
-        "price": price,
-        "prev_price": prev_price,
-        "drop": round(drop, 2),
-        "rise": round(rise, 2),  # ← add this
-        "ambient_vol": ambient_vol,
-        "vol_spike": vol_spike_r,
-        "alert_types": alert_types,
+        "price":        price,
+        "prev_price":   prev_price,
+        "drop":         round(drop, 2),
+        "rise":         round(rise, 2),
+        "ambient_vol":  ambient_vol,
+        "vol_spike":    vol_spike_r,
+        "alert_types":  alert_types,
     }
 
 
@@ -286,10 +286,11 @@ def run_scan(dry_run: bool = False) -> dict:
                     "vol_spike":   analysis["vol_spike"],
                     "category":    market.get("category", ""),
                 })
+
             elif alert_type == "SPIKE":
                 msg = format_spike_alert(
                     market,
-                    analysis["rise"],  # need to add this to the return dict too
+                    analysis["rise"],
                     analysis["ambient_vol"],
                     analysis["vol_spike"],
                     analysis["prev_price"],
@@ -297,10 +298,28 @@ def run_scan(dry_run: bool = False) -> dict:
 
             if not dry_run:
                 if send_telegram(msg):
+                    # ── Sheets export ──────────────────────────────────────
+                    if alert_type == "DROP":
+                        log_drop_alert(
+                            market      = market,
+                            drop_pts    = analysis["drop"],
+                            prev_price  = analysis["prev_price"],
+                            vol_spike   = analysis["vol_spike"],
+                            ambient_vol = analysis["ambient_vol"],
+                        )
+                    elif alert_type == "SPIKE":
+                        log_spike_alert(
+                            market      = market,
+                            spike_pts   = analysis["rise"],
+                            prev_price  = analysis["prev_price"],
+                            vol_spike   = analysis["vol_spike"],
+                            ambient_vol = analysis["ambient_vol"],
+                        )
+                    # ── DB log ─────────────────────────────────────────────
                     db.log_alert(
                         market["condition_id"], alert_type,
-                        price     = market["yes_price"],
-                        drop      = analysis.get("drop"),
+                        price       = market["yes_price"],
+                        drop        = analysis.get("drop"),
                         ambient_vol = analysis.get("ambient_vol"),
                     )
                     alerts_fired += 1
@@ -329,7 +348,7 @@ def run_scan(dry_run: bool = False) -> dict:
 def main():
     parser = argparse.ArgumentParser(description="Polymarket market scanner")
     parser.add_argument("--loop",    action="store_true", help="Run continuously")
-    parser.add_argument("--lag", action="store_true",
+    parser.add_argument("--lag",     action="store_true",
                         help="Find stale extreme markets (NO-buy opportunities)")
     parser.add_argument("--dry-run", action="store_true", help="Analyse only, no Telegram")
     parser.add_argument("--stats",   action="store_true", help="Print DB stats and exit")
@@ -372,7 +391,7 @@ def main():
                   f"${m['liquidity']:>9,.0f}  "
                   f"{m['question'][:50]}")
         print(f"\n{len(candidates)} stale extreme markets found\n")
-        return  # ← add this
+        return
 
     if args.loop:
         log.info(f"Starting continuous scanner (interval: {POLL_INTERVAL}s)…")
