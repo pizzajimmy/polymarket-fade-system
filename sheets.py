@@ -26,11 +26,14 @@ Column order matches Raw Alerts sheet (set up by Code.gs):
 import os
 import json
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 
 log = logging.getLogger("scanner.sheets")
 
 _service = None   # lazy-initialised Google Sheets service
+
+# NZT = UTC+13 (NZDT) or UTC+12 (NZST) — use fixed offset to avoid tzdata dependency
+NZT_OFFSET = timedelta(hours=13)   # NZDT (daylight saving, Oct–Apr)
 
 
 # ── Auth ──────────────────────────────────────────────────────────────────────
@@ -43,7 +46,7 @@ def _get_service():
 
     sa_json = os.getenv("GOOGLE_SERVICE_ACCOUNT_JSON", "")
     if not sa_json:
-        log.debug("GOOGLE_SERVICE_ACCOUNT_JSON not set — Sheets export disabled.")
+        log.warning("GOOGLE_SERVICE_ACCOUNT_JSON not set — Sheets export disabled.")
         return None
 
     try:
@@ -62,7 +65,7 @@ def _get_service():
     except ImportError:
         log.warning(
             "google-auth / google-api-python-client not installed. "
-            "Run: pip install google-auth google-api-python-client"
+            "Add to requirements.txt: google-auth>=2.0.0 google-api-python-client>=2.0.0"
         )
         return None
     except Exception as e:
@@ -84,48 +87,47 @@ def log_alert(
     """
     Append one row to the Raw Alerts sheet.
 
-    Returns True on success, False on failure or if Sheets is disabled.
-    Failures are logged but never raise — the scanner must not crash
-    because of a Sheets write error.
+    Returns True on success, False on any failure.
+    Never raises — the scanner must not crash due to a Sheets error.
     """
-    sheet_id = os.getenv("GOOGLE_SHEET_ID", "")
-    if not sheet_id:
-        log.debug("GOOGLE_SHEET_ID not set — skipping Sheets export.")
-        return False
-
-    svc = _get_service()
-    if svc is None:
-        return False
-
-    now_nzt = datetime.now(timezone.utc).astimezone(
-        __import__("zoneinfo").ZoneInfo("Pacific/Auckland")
-    )
-    timestamp = now_nzt.strftime("%Y-%m-%d %H:%M:%S NZT")
-
-    row = [
-        timestamp,
-        market.get("question", ""),
-        market.get("url", ""),
-        market.get("category", ""),
-        direction,
-        round(price_before, 2),
-        round(price_after, 2),
-        round(change_pts, 2),
-        round(market.get("volume_24h", 0), 2),
-        round(vol_spike, 2),
-        round(market.get("liquidity", 0), 2),
-        round(ambient_vol, 2) if ambient_vol is not None else "",
-    ]
-
     try:
+        sheet_id = os.getenv("GOOGLE_SHEET_ID", "")
+        if not sheet_id:
+            log.warning("GOOGLE_SHEET_ID not set — skipping Sheets export.")
+            return False
+
+        svc = _get_service()
+        if svc is None:
+            return False
+
+        # Fixed UTC+13 offset avoids tzdata dependency on Railway
+        now_nzt = datetime.now(timezone(NZT_OFFSET))
+        timestamp = now_nzt.strftime("%Y-%m-%d %H:%M:%S NZT")
+
+        row = [
+            timestamp,
+            market.get("question", ""),
+            market.get("url", ""),
+            market.get("category", ""),
+            direction,
+            round(price_before, 2),
+            round(price_after, 2),
+            round(change_pts, 2),
+            round(market.get("volume_24h", 0), 2),
+            round(vol_spike, 2),
+            round(market.get("liquidity", 0), 2),
+            round(ambient_vol, 2) if ambient_vol is not None else "",
+        ]
+
         svc.spreadsheets().values().append(
             spreadsheetId=sheet_id,
             range="Raw Alerts!A:L",
-            valueInputOption="USER_ENTERED",   # lets Sheets parse numbers correctly
+            valueInputOption="USER_ENTERED",
             insertDataOption="INSERT_ROWS",
             body={"values": [row]},
         ).execute()
-        log.info(f"[sheets] Logged alert: {market.get('question','')[:50]}")
+
+        log.info(f"[sheets] Logged {direction}: {market.get('question','')[:50]}")
         return True
 
     except Exception as e:
