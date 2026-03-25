@@ -7,19 +7,19 @@ Orchestrates the full scan cycle:
   3. Record current price in price_history
   4. Calculate drop vs 24h ago and ambient volatility
   5. Fire Telegram alerts for qualifying setups
+  6. Check for correlated markets that haven't repriced yet (lag sniper)
 
 Run on a cron: */30 * * * *  (every 30 minutes)
 Or continuous: python scanner.py --loop
 """
 
 import os
-import json
+import re
 import time
 import logging
 import argparse
 import requests
 from datetime import datetime
-from pathlib import Path
 from sheets import log_drop_alert, log_spike_alert
 
 import db
@@ -29,24 +29,40 @@ from gamma import fetch_all_active_markets
 
 TG_TOKEN  = os.environ.get("TG_TOKEN", "")
 TG_CHAT   = os.environ.get("TG_CHAT_ID", "")
-SPIKE_THRESHOLD = float(os.environ.get("SPIKE_THRESHOLD", "15"))   # points up
-DROP_THRESHOLD      = float(os.environ.get("DROP_THRESHOLD", "15"))     # points
-MIN_LIQUIDITY       = float(os.environ.get("MIN_LIQUIDITY", "1000"))    # USDC
-MIN_VOLUME_24H      = float(os.environ.get("MIN_VOLUME_24H", "500"))    # USDC
-MIN_DAYS_TO_RES     = int(os.environ.get("MIN_DAYS_TO_RESOLUTION", "7"))# days — filters event-driven markets
-AMBIENT_VOL_HIGH    = float(os.environ.get("AMBIENT_VOL_HIGH", "5"))    # pts/day
-VOLUME_SPIKE_RATIO  = float(os.environ.get("VOLUME_SPIKE_RATIO", "1.8"))
-ALERT_COOLDOWN_HRS  = int(os.environ.get("ALERT_COOLDOWN_HRS", "12"))   # hours
-POLL_INTERVAL       = int(os.environ.get("POLL_INTERVAL_SECS", "1800")) # 30 min
-PRUNE_DAYS          = int(os.environ.get("PRUNE_DAYS", "90"))           # keep 90 days
+SPIKE_THRESHOLD    = float(os.environ.get("SPIKE_THRESHOLD", "15"))
+DROP_THRESHOLD     = float(os.environ.get("DROP_THRESHOLD", "15"))
+MIN_LIQUIDITY      = float(os.environ.get("MIN_LIQUIDITY", "1000"))
+MIN_VOLUME_24H     = float(os.environ.get("MIN_VOLUME_24H", "500"))
+MIN_DAYS_TO_RES    = int(os.environ.get("MIN_DAYS_TO_RESOLUTION", "7"))
+AMBIENT_VOL_HIGH   = float(os.environ.get("AMBIENT_VOL_HIGH", "5"))
+VOLUME_SPIKE_RATIO = float(os.environ.get("VOLUME_SPIKE_RATIO", "1.8"))
+ALERT_COOLDOWN_HRS = int(os.environ.get("ALERT_COOLDOWN_HRS", "12"))
+POLL_INTERVAL      = int(os.environ.get("POLL_INTERVAL_SECS", "1800"))
+PRUNE_DAYS         = int(os.environ.get("PRUNE_DAYS", "90"))
 
-# Fixture patterns — short-lived event markets that look high-vol
-# but are just pre-resolution binaries, not narrative overcorrections
+# Minimum keyword overlap to consider markets correlated
+CORR_MIN_OVERLAP   = int(os.environ.get("CORR_MIN_OVERLAP", "2"))
+# A lagging market must NOT have moved more than this in the expected direction
+CORR_LAG_THRESHOLD = float(os.environ.get("CORR_LAG_THRESHOLD", "5.0"))
+# Max correlated markets to show per alert
+CORR_MAX_RESULTS   = int(os.environ.get("CORR_MAX_RESULTS", "5"))
+
 FIXTURE_KEYWORDS = [
     " vs ", " vs. ", "o/u ", "over/under", "spread:",
     "both teams to score", "first half", "map 1", "map 2",
     "odd/even", "moneyline", "correct score", "next goal",
 ]
+
+STOPWORDS = {
+    "will", "the", "a", "an", "in", "on", "at", "by", "for", "of", "to",
+    "be", "is", "was", "are", "were", "have", "has", "had", "do", "does",
+    "did", "and", "or", "but", "not", "this", "that", "from", "with",
+    "before", "after", "during", "between", "about", "than", "more", "less",
+    "happen", "occur", "pass", "win", "lose", "become", "get", "any", "all",
+    "next", "last", "first", "new", "old", "big", "small", "high", "low",
+    "its", "their", "there", "which", "who", "what", "when", "where", "how",
+    "by", "as", "if", "up", "out", "no", "so", "we", "he", "she", "they",
+}
 
 logging.basicConfig(
     level=logging.INFO,
@@ -76,25 +92,6 @@ def send_telegram(message: str) -> bool:
         log.error(f"Telegram failed: {e}")
         return False
 
-def format_spike_alert(market, rise, ambient_vol, vol_spike, prev_price):
-    q = market["question"][:90] + ("…" if len(market["question"]) > 90 else "")
-    cat = market.get("category", "unknown")
-    url = market.get("url", "")
-    url_tag = f'\n<a href="{url}">Open on Polymarket</a>' if url else ""
-    amb_str = ""
-    if ambient_vol:
-        amb_flag = " ⚠ HIGH RETAIL VOL" if ambient_vol >= AMBIENT_VOL_HIGH else ""
-        amb_str = f"\nAmbient vol: {ambient_vol:.1f} pts/day{amb_flag}"
-    return (
-        f"📈 <b>Price spike alert — {cat}</b>\n"
-        f"<i>{q}</i>\n\n"
-        f"Spike:   <b>{prev_price:.1f}¢ → {market['yes_price']:.1f}¢  (+{rise:.1f} pts)</b>\n"
-        f"Volume:  ${market['volume_24h']:,.0f} 24h  {vol_spike:.1f}× avg volume\n"
-        f"Liquidity: ${market['liquidity']:,.0f}\n"
-        f"<i>Consider buying NO if spike is sentiment-driven speculation.</i>"
-        f"{amb_str}"
-        f"{url_tag}"
-    )
 
 def format_drop_alert(market: dict, drop: float, ambient_vol: float | None,
                       vol_spike: float, prev_price: float) -> str:
@@ -107,13 +104,34 @@ def format_drop_alert(market: dict, drop: float, ambient_vol: float | None,
         amb_str = f"\nAmbient vol: {ambient_vol:.1f} pts/day{amb_flag}"
     url = market.get("url", "")
     url_tag = f'\n<a href="{url}">Open on Polymarket</a>' if url else ""
-
     return (
         f"📉 <b>Price drop alert — {cat}</b>\n"
         f"<i>{q}</i>\n\n"
         f"Drop:    <b>{prev_price:.1f}¢ → {market['yes_price']:.1f}¢  (−{drop:.1f} pts)</b>\n"
         f"Volume:  ${market['volume_24h']:,.0f} 24h  {vol_str}\n"
         f"Liquidity: ${market['liquidity']:,.0f}"
+        f"{amb_str}"
+        f"{url_tag}"
+    )
+
+
+def format_spike_alert(market: dict, rise: float, ambient_vol: float | None,
+                       vol_spike: float, prev_price: float) -> str:
+    q = market["question"][:90] + ("…" if len(market["question"]) > 90 else "")
+    cat = market.get("category", "unknown")
+    amb_str = ""
+    if ambient_vol:
+        amb_flag = " ⚠ HIGH RETAIL VOL" if ambient_vol >= AMBIENT_VOL_HIGH else ""
+        amb_str = f"\nAmbient vol: {ambient_vol:.1f} pts/day{amb_flag}"
+    url = market.get("url", "")
+    url_tag = f'\n<a href="{url}">Open on Polymarket</a>' if url else ""
+    return (
+        f"📈 <b>Price spike alert — {cat}</b>\n"
+        f"<i>{q}</i>\n\n"
+        f"Spike:   <b>{prev_price:.1f}¢ → {market['yes_price']:.1f}¢  (+{rise:.1f} pts)</b>\n"
+        f"Volume:  ${market['volume_24h']:,.0f} 24h  {vol_spike:.1f}× avg volume\n"
+        f"Liquidity: ${market['liquidity']:,.0f}\n"
+        f"<i>Consider buying NO if spike is sentiment-driven speculation.</i>"
         f"{amb_str}"
         f"{url_tag}"
     )
@@ -134,6 +152,152 @@ def format_ambient_alert(market: dict, ambient_vol: float) -> str:
     )
 
 
+# ── Correlated market lag detector ────────────────────────────────────────────
+
+def _extract_keywords(question: str, max_kw: int = 8) -> set[str]:
+    """Extract meaningful keywords from a market question."""
+    words = re.sub(r"[^a-zA-Z0-9\s]", " ", question).lower().split()
+    kws = [w for w in words if w not in STOPWORDS and len(w) >= 3]
+    # Prioritise longer words — more distinctive
+    kws.sort(key=len, reverse=True)
+    return set(kws[:max_kw])
+
+
+def find_lagging_correlated(market: dict, direction: str) -> list[dict]:
+    """
+    Find markets in the DB that are topically correlated with the alerted
+    market but haven't repriced yet in the expected direction.
+
+    direction: "DROP" — look for correlated markets still holding high
+               "SPIKE" — look for correlated markets still holding low
+
+    Returns list of dicts sorted by lag magnitude (biggest opportunity first).
+    """
+    try:
+        trigger_kws  = _extract_keywords(market["question"])
+        trigger_cid  = market["condition_id"]
+        trigger_price = market["yes_price"]
+
+        if len(trigger_kws) < 2:
+            return []
+
+        # Pull all markets + their latest price from DB in one query
+        with db.conn() as c:
+            rows = c.execute("""
+                SELECT m.condition_id, m.question, m.url, m.liquidity,
+                       p.price as current_price
+                FROM markets m
+                JOIN price_history p ON p.condition_id = m.condition_id
+                JOIN (
+                    SELECT condition_id, MAX(polled_at) AS latest
+                    FROM price_history
+                    GROUP BY condition_id
+                ) t ON t.condition_id = p.condition_id
+                    AND p.polled_at = t.latest
+                WHERE m.condition_id != ?
+                  AND m.liquidity >= ?
+                  AND p.price > 1
+                  AND p.price < 99
+            """, (trigger_cid, MIN_LIQUIDITY)).fetchall()
+
+        lagging = []
+
+        for row in rows:
+            cid      = row["condition_id"]
+            question = row["question"]
+            price    = row["current_price"]
+            liq      = row["liquidity"]
+
+            # Skip fixture-style markets
+            q_lower = question.lower()
+            if any(kw in q_lower for kw in FIXTURE_KEYWORDS):
+                continue
+
+            # Check keyword overlap
+            candidate_kws = _extract_keywords(question)
+            overlap = trigger_kws & candidate_kws
+            if len(overlap) < CORR_MIN_OVERLAP:
+                continue
+
+            # Fetch 24h ago price to compute this market's delta
+            prev = db.price_n_hours_ago(cid, hours=24)
+            if prev is None:
+                continue
+
+            delta = price - prev  # positive = rose, negative = fell
+
+            # "Lagging" means: the correlated market has NOT moved in the
+            # direction the trigger market moved, beyond the lag threshold.
+            #
+            # DROP trigger: correlated market should have dropped too.
+            #   If it hasn't dropped >CORR_LAG_THRESHOLD, it's lagging.
+            # SPIKE trigger: correlated market should have risen too.
+            #   If it hasn't risen >CORR_LAG_THRESHOLD, it's lagging.
+
+            if direction == "DROP" and delta > -CORR_LAG_THRESHOLD:
+                # Still holding high — lagging drop candidate
+                lag_pts = abs(delta - (-CORR_LAG_THRESHOLD))  # how much it should still fall
+                lagging.append({
+                    "question":  question,
+                    "url":       row["url"] or "",
+                    "price":     round(price, 1),
+                    "prev":      round(prev, 1),
+                    "delta":     round(delta, 1),
+                    "lag_pts":   round(lag_pts, 1),
+                    "overlap":   sorted(overlap),
+                    "liquidity": liq,
+                })
+
+            elif direction == "SPIKE" and delta < CORR_LAG_THRESHOLD:
+                # Still holding low — lagging spike candidate
+                lag_pts = abs(CORR_LAG_THRESHOLD - delta)
+                lagging.append({
+                    "question":  question,
+                    "url":       row["url"] or "",
+                    "price":     round(price, 1),
+                    "prev":      round(prev, 1),
+                    "delta":     round(delta, 1),
+                    "lag_pts":   round(lag_pts, 1),
+                    "overlap":   sorted(overlap),
+                    "liquidity": liq,
+                })
+
+        # Sort by liquidity desc (most tradeable first), cap results
+        lagging.sort(key=lambda x: x["liquidity"], reverse=True)
+        return lagging[:CORR_MAX_RESULTS]
+
+    except Exception as e:
+        log.error(f"[correlate] Error finding lagging markets: {e}")
+        return []
+
+
+def format_lag_section(lagging: list[dict], direction: str,
+                       trigger_question: str) -> str:
+    """Format a Telegram follow-up message listing lagging correlated markets."""
+    arrow  = "📉" if direction == "DROP" else "📈"
+    action = "haven't dropped yet" if direction == "DROP" else "haven't spiked yet"
+    trade  = "NO" if direction == "DROP" else "YES"   # what to buy on the lag
+
+    lines = [
+        f"🔗 <b>Correlated markets — {action}</b>\n"
+        f"<i>Trigger: {trigger_question[:70]}</i>\n"
+    ]
+
+    for m in lagging:
+        delta_str = f"{m['delta']:+.1f}¢" if m['delta'] != 0 else "flat"
+        kw_str    = ", ".join(m["overlap"][:3])
+        url_tag   = f'<a href="{m["url"]}">→</a> ' if m["url"] else ""
+        lines.append(
+            f"{arrow} {url_tag}<b>{m['price']:.1f}¢</b>  ({delta_str} 24h)  "
+            f"liq ${m['liquidity']:,.0f}\n"
+            f"   <i>{m['question'][:75]}</i>\n"
+            f"   keywords: {kw_str}"
+        )
+
+    lines.append(f"\n<i>Consider {trade} on any of the above if thesis holds.</i>")
+    return "\n\n".join(lines)
+
+
 # ── Core scan ─────────────────────────────────────────────────────────────────
 
 def _days_to_resolution(end_date_str: str) -> int | None:
@@ -149,21 +313,13 @@ def _days_to_resolution(end_date_str: str) -> int | None:
 
 
 def _is_tradeable(market: dict) -> bool:
-    """
-    Filter markets worth analysing for fade setups.
-    Excludes: illiquid, low-volume, match fixtures, near-expiry markets.
-    Long-dated sports markets (season outcomes, awards) are included.
-    """
     if market["liquidity"] < MIN_LIQUIDITY:
         return False
     if market["volume_24h"] < MIN_VOLUME_24H:
         return False
-    # Skip short-lived match fixtures — high ambient vol from binary resolution,
-    # not narrative overcorrection
     q = market.get("question", "").lower()
     if any(kw in q for kw in FIXTURE_KEYWORDS):
         return False
-    # Skip markets resolving in < 7 days — too short for fade recovery
     days = _days_to_resolution(market.get("end_date", ""))
     if days is not None and days < MIN_DAYS_TO_RES:
         return False
@@ -171,20 +327,13 @@ def _is_tradeable(market: dict) -> bool:
 
 
 def analyse_market(market: dict) -> dict:
-    """
-    For a market we've just polled, compute:
-      - drop vs 24h ago
-      - ambient volatility (30-day)
-      - volume spike ratio
-    Returns an analysis dict with alert_types list.
-    """
-    cid      = market["condition_id"]
-    price    = market["yes_price"]
-    vol_24h  = market["volume_24h"]
+    cid     = market["condition_id"]
+    price   = market["yes_price"]
+    vol_24h = market["volume_24h"]
 
-    prev_price   = db.price_n_hours_ago(cid, hours=24)
-    ambient_vol  = db.ambient_volatility(cid, days=30)
-    vol_spike_r  = db.volume_spike(cid, vol_24h) if vol_24h else 1.0
+    prev_price  = db.price_n_hours_ago(cid, hours=24)
+    ambient_vol = db.ambient_volatility(cid, days=30)
+    vol_spike_r = db.volume_spike(cid, vol_24h) if vol_24h else 1.0
 
     drop = (prev_price - price) if prev_price else 0
     rise = (price - prev_price) if prev_price else 0
@@ -196,15 +345,12 @@ def analyse_market(market: dict) -> dict:
             and vol_spike_r >= VOLUME_SPIKE_RATIO):
         alert_types.append("SPIKE")
 
-    # Drop alert: 15+ points down in 24h, with volume confirmation
     if (prev_price is not None
             and drop >= DROP_THRESHOLD
             and vol_spike_r >= VOLUME_SPIKE_RATIO):
         alert_types.append("DROP")
-
-    # Drop alert without volume spike (looser — still worth flagging)
     elif (prev_price is not None
-          and drop >= DROP_THRESHOLD + 5):    # require larger drop if no vol spike
+          and drop >= DROP_THRESHOLD + 5):
         alert_types.append("DROP")
 
     return {
@@ -235,18 +381,16 @@ def run_scan(dry_run: bool = False) -> dict:
     for market in fetch_all_active_markets():
         markets_seen += 1
 
-        # Always upsert metadata so we have it for the alert bot too
         db.upsert_market(
-            condition_id  = market["condition_id"],
-            question      = market["question"],
-            slug          = market.get("slug", ""),
-            url           = market.get("url", ""),
-            token_id_yes  = market.get("token_id_yes", ""),
-            category      = market.get("category", "politics"),
-            end_date      = market.get("end_date", ""),
+            condition_id = market["condition_id"],
+            question     = market["question"],
+            slug         = market.get("slug", ""),
+            url          = market.get("url", ""),
+            token_id_yes = market.get("token_id_yes", ""),
+            category     = market.get("category", "politics"),
+            end_date     = market.get("end_date", ""),
         )
 
-        # Record price even for illiquid markets — builds ambient vol history
         db.record_price(
             condition_id = market["condition_id"],
             price        = market["yes_price"],
@@ -255,7 +399,6 @@ def run_scan(dry_run: bool = False) -> dict:
         )
         prices_stored += 1
 
-        # Only analyse markets with enough liquidity to trade
         if not _is_tradeable(market):
             continue
 
@@ -286,7 +429,6 @@ def run_scan(dry_run: bool = False) -> dict:
                     "vol_spike":   analysis["vol_spike"],
                     "category":    market.get("category", ""),
                 })
-
             elif alert_type == "SPIKE":
                 msg = format_spike_alert(
                     market,
@@ -323,8 +465,27 @@ def run_scan(dry_run: bool = False) -> dict:
                         ambient_vol = analysis.get("ambient_vol"),
                     )
                     alerts_fired += 1
+
+                    # ── Correlated lag check ───────────────────────────────
+                    lagging = find_lagging_correlated(market, alert_type)
+                    if lagging:
+                        lag_msg = format_lag_section(
+                            lagging, alert_type, market["question"]
+                        )
+                        send_telegram(lag_msg)
+                        log.info(
+                            f"[correlate] {len(lagging)} lagging markets found "
+                            f"for {market['question'][:40]}"
+                        )
+
             else:
                 log.info(f"[DRY RUN] Would alert {alert_type}: {market['question'][:60]}")
+                # Still run correlation in dry-run so you can see what it finds
+                lagging = find_lagging_correlated(market, alert_type)
+                if lagging:
+                    log.info(f"[DRY RUN] Correlated lag candidates ({len(lagging)}):")
+                    for m in lagging:
+                        log.info(f"  {m['price']:.1f}¢  {m['question'][:60]}")
                 alerts_fired += 1
 
     elapsed = round(time.time() - start, 1)
