@@ -19,12 +19,13 @@
 function onOpen() {
   SpreadsheetApp.getUi()
     .createMenu("Polymarket")
-    .addItem("Evaluate Selected Market", "openEvaluationDialog")
-    .addItem("Setup Sheets", "setupSheets")
+    .addItem("Evaluate Selected Market",       "openEvaluationDialog")
+    .addItem("Setup / Fix Sheets",             "setupSheets")
     .addSeparator()
-    .addItem("Prune Low-Quality Alerts", "pruneRawAlerts")
+    .addItem("Refresh Prices & Resolution",    "refreshEvaluations")
+    .addItem("Prune Low-Quality Alerts",       "pruneRawAlerts")
     .addSeparator()
-    .addItem("Calibration Report", "runCalibrationReport")
+    .addItem("Calibration Report",             "runCalibrationReport")
     .addToUi();
 }
 
@@ -46,53 +47,81 @@ function setupSheets() {
     rawSheet.getRange("A1:N1").setFontWeight("bold");
   }
 
-  // Evaluations Log
+  // Evaluations Log — always rewrite headers so stale layouts get fixed.
   var evalSheet = ss.getSheetByName("Evaluations Log") || ss.insertSheet("Evaluations Log");
-  if (evalSheet.getRange("A1").getValue() === "") {
-    evalSheet.getRange("A1:Y1").setValues([[
-      "Eval Timestamp", "Alert Timestamp", "Market Name", "Market URL",
-      "Category", "Direction", "Alert Price", "Price at Evaluation",
-      "Edge at Evaluation", "Fair Value Estimate", "Classification",
-      "Sub-classification", "News Source", "Time to Evaluate (hrs)",
-      "Verdict", "Thesis", "Quality Score", "Entered Trade?",
-      "Entry Price", "Exit Price", "Exit Reason", "Days Held",
-      "P&L (pts)", "Classification Correct?", "Notes"
-    ]]);
-    evalSheet.getRange("A1:Y1").setFontWeight("bold");
+  evalSheet.getRange("A1:AB1").setValues([[
+    // ── Alert context (A–N) ──
+    "Eval Timestamp",          // A
+    "Alert Timestamp",         // B
+    "Market Name",             // C
+    "Market URL",              // D
+    "Category",                // E
+    "Direction",               // F
+    "Alert Price",             // G
+    "Price at Evaluation",     // H
+    "Edge at Evaluation",      // I
+    "Fair Value Estimate",     // J
+    "Classification",          // K
+    "Sub-classification",      // L
+    "News Source",             // M
+    "Time to Evaluate (hrs)",  // N
+    // ── Decision (O–Q) ──
+    "Verdict",                 // O
+    "Thesis",                  // P
+    "Quality Score",           // Q
+    // ── Trade outcome (R–Y) — filled manually ──
+    "Entered Trade?",          // R
+    "Entry Price",             // S
+    "Exit Price",              // T
+    "Exit Reason",             // U
+    "Days Held",               // V
+    "P&L (pts)",               // W
+    "Classification Correct?", // X
+    "Notes",                   // Y
+    // ── Live market data (Z–AB) — filled by Refresh ──
+    "Current Price",           // Z
+    "Resolution",              // AA
+    "Last Checked",            // AB
+  ]]);
+  evalSheet.getRange("A1:AB1").setFontWeight("bold");
 
-    var classRule = SpreadsheetApp.newDataValidation()
-      .requireValueInList(["SENTIMENT", "STRUCTURAL", "UNCLEAR"], true).build();
-    evalSheet.getRange("K2:K1000").setDataValidation(classRule);
+  // Data validation — only apply once (idempotent on already-validated ranges)
+  var classRule = SpreadsheetApp.newDataValidation()
+    .requireValueInList(["SENTIMENT", "STRUCTURAL", "UNCLEAR"], true).build();
+  evalSheet.getRange("K2:K1000").setDataValidation(classRule);
 
-    var subclassRule = SpreadsheetApp.newDataValidation()
-      .requireValueInList([
-        "PROCEDURAL_DELAY", "NEGATIVE_COMMENTARY", "UNFAVOURABLE_POLL",
-        "PERSONAL_CONDUCT", "LEAKED_DOCUMENT",
-        "HARD_OUTCOME", "REGULATORY_RULING", "FACTUAL_REVELATION",
-        "TIMELINE_COMPRESSION", "UNCLEAR"
-      ], true).build();
-    evalSheet.getRange("L2:L1000").setDataValidation(subclassRule);
+  var subclassRule = SpreadsheetApp.newDataValidation()
+    .requireValueInList([
+      "PROCEDURAL_DELAY", "NEGATIVE_COMMENTARY", "UNFAVOURABLE_POLL",
+      "PERSONAL_CONDUCT", "LEAKED_DOCUMENT",
+      "HARD_OUTCOME", "REGULATORY_RULING", "FACTUAL_REVELATION",
+      "TIMELINE_COMPRESSION", "UNCLEAR"
+    ], true).build();
+  evalSheet.getRange("L2:L1000").setDataValidation(subclassRule);
 
-    var sourceRule = SpreadsheetApp.newDataValidation()
-      .requireValueInList(["POLYMARKET_COMMENTS", "MAINSTREAM_NEWS", "TWITTER", "OTHER"], true).build();
-    evalSheet.getRange("M2:M1000").setDataValidation(sourceRule);
+  var sourceRule = SpreadsheetApp.newDataValidation()
+    .requireValueInList(["POLYMARKET_COMMENTS", "MAINSTREAM_NEWS", "TWITTER", "OTHER"], true).build();
+  evalSheet.getRange("M2:M1000").setDataValidation(sourceRule);
 
-    var verdictRule = SpreadsheetApp.newDataValidation()
-      .requireValueInList(["GO", "WEAK_GO", "PASS"], true).build();
-    evalSheet.getRange("O2:O1000").setDataValidation(verdictRule);
+  var verdictRule = SpreadsheetApp.newDataValidation()
+    .requireValueInList(["GO", "WEAK_GO", "PASS"], true).build();
+  evalSheet.getRange("O2:O1000").setDataValidation(verdictRule);
 
-    var tradedRule = SpreadsheetApp.newDataValidation()
-      .requireValueInList(["YES", "NO"], true).build();
-    evalSheet.getRange("R2:R1000").setDataValidation(tradedRule);
+  var tradedRule = SpreadsheetApp.newDataValidation()
+    .requireValueInList(["YES", "NO"], true).build();
+  evalSheet.getRange("R2:R1000").setDataValidation(tradedRule);
 
-    var exitRule = SpreadsheetApp.newDataValidation()
-      .requireValueInList(["TARGET", "STOP", "STALE", "STRUCTURAL_UPDATE", "MANUAL"], true).build();
-    evalSheet.getRange("U2:U1000").setDataValidation(exitRule);
+  var exitRule = SpreadsheetApp.newDataValidation()
+    .requireValueInList(["TARGET", "STOP", "STALE", "STRUCTURAL_UPDATE", "MANUAL"], true).build();
+  evalSheet.getRange("U2:U1000").setDataValidation(exitRule);
 
-    var correctRule = SpreadsheetApp.newDataValidation()
-      .requireValueInList(["YES", "NO", "PARTIAL"], true).build();
-    evalSheet.getRange("X2:X1000").setDataValidation(correctRule);
-  }
+  var correctRule = SpreadsheetApp.newDataValidation()
+    .requireValueInList(["YES", "NO", "PARTIAL"], true).build();
+  evalSheet.getRange("X2:X1000").setDataValidation(correctRule);
+
+  var resolutionRule = SpreadsheetApp.newDataValidation()
+    .requireValueInList(["PENDING", "YES", "NO", "AMBIGUOUS"], true).build();
+  evalSheet.getRange("AA2:AA1000").setDataValidation(resolutionRule);
 
   // Positions Log
   var posSheet = ss.getSheetByName("Positions Log") || ss.insertSheet("Positions Log");
@@ -418,6 +447,135 @@ function logPosition(data) {
     data.thesis      || "",
     "", "", "",
   ]);
+}
+
+
+// ── Market status (price + resolution) ───────────────────────────────────────
+
+function checkMarketStatus(slugOrEventSlug, question) {
+  /**
+   * Fetches current YES price and resolution status for a market.
+   * Returns { price, resolution, closed }
+   *   resolution: "PENDING" | "YES" | "NO" | "AMBIGUOUS" | "UNKNOWN"
+   */
+  function parsePrices(m) {
+    try {
+      var prices = m.outcomePrices;
+      if (typeof prices === "string") prices = JSON.parse(prices);
+      return (prices && prices.length > 0) ? parseFloat(prices[0]) * 100 : null;
+    } catch (e) { return null; }
+  }
+
+  function fetchRaw(slug, asEventSlug) {
+    var param = asEventSlug ? "eventSlug" : "slug";
+    var url = "https://gamma-api.polymarket.com/markets?" + param + "=" +
+              encodeURIComponent(slug) + "&limit=50&closed=true";
+    try {
+      var resp = UrlFetchApp.fetch(url, { muteHttpExceptions: true });
+      if (resp.getResponseCode() !== 200) return null;
+      var data = JSON.parse(resp.getContentText());
+      if (!data || data.length === 0) return null;
+      if (asEventSlug && question) {
+        var q = question.toLowerCase();
+        for (var i = 0; i < data.length; i++) {
+          if ((data[i].question || "").toLowerCase() === q) return data[i];
+        }
+      }
+      // Return highest-liquidity result as fallback
+      data.sort(function(a, b) { return (b.liquidity || 0) - (a.liquidity || 0); });
+      return data[0];
+    } catch (e) { return null; }
+  }
+
+  try {
+    // Try as direct market slug first, then as event slug
+    var market = fetchRaw(slugOrEventSlug, false) ||
+                 fetchRaw(slugOrEventSlug, true);
+
+    if (!market) return { price: null, resolution: "UNKNOWN", closed: false };
+
+    var price  = parsePrices(market);
+    var closed = market.closed === true || market.active === false;
+
+    var resolution = "PENDING";
+    if (closed) {
+      if (price === null)      resolution = "AMBIGUOUS";
+      else if (price >= 99)    resolution = "YES";
+      else if (price <= 1)     resolution = "NO";
+      else                     resolution = "AMBIGUOUS";
+    }
+
+    return { price: price, resolution: resolution, closed: closed };
+  } catch (e) {
+    return { price: null, resolution: "UNKNOWN", closed: false };
+  }
+}
+
+
+// ── Refresh prices and resolution in Evaluations Log ─────────────────────────
+
+function refreshEvaluations() {
+  var ss    = SpreadsheetApp.getActiveSpreadsheet();
+  var sheet = ss.getSheetByName("Evaluations Log");
+  if (!sheet) {
+    SpreadsheetApp.getUi().alert("No Evaluations Log sheet found. Run Setup / Fix Sheets first.");
+    return;
+  }
+
+  var data = sheet.getDataRange().getValues();
+  if (data.length < 2) {
+    SpreadsheetApp.getUi().alert("No evaluation rows found.");
+    return;
+  }
+
+  // Col indices (0-based)
+  var COL_URL        = 3;   // D — Market URL
+  var COL_QUESTION   = 2;   // C — Market Name
+  var COL_PRICE_NOW  = 25;  // Z — Current Price
+  var COL_RESOLUTION = 26;  // AA — Resolution
+  var COL_CHECKED    = 27;  // AB — Last Checked
+
+  var now        = new Date();
+  var updated    = 0;
+  var resolved   = 0;
+  var errors     = 0;
+
+  for (var i = 1; i < data.length; i++) {
+    var url      = (data[i][COL_URL] || "").toString().trim();
+    var question = (data[i][COL_QUESTION] || "").toString().trim();
+    if (!url) continue;
+
+    var match = url.match(/polymarket\.com\/event\/([^/?#]+)/);
+    if (!match) continue;
+    var slug = match[1];
+
+    try {
+      var status = checkMarketStatus(slug, question);
+
+      // Write to Z, AA, AB (cols 26, 27, 28 in 1-indexed sheet notation)
+      var rowNum = i + 1;
+      if (status.price !== null) {
+        sheet.getRange(rowNum, COL_PRICE_NOW  + 1).setValue(parseFloat(status.price.toFixed(1)));
+      }
+      sheet.getRange(rowNum, COL_RESOLUTION + 1).setValue(status.resolution);
+      sheet.getRange(rowNum, COL_CHECKED    + 1).setValue(now);
+
+      updated++;
+      if (status.resolution === "YES" || status.resolution === "NO") resolved++;
+
+      // Throttle to avoid Gamma API rate limits
+      Utilities.sleep(400);
+    } catch (e) {
+      errors++;
+    }
+  }
+
+  SpreadsheetApp.getUi().alert(
+    "Refresh complete.\n\n" +
+    "• " + updated  + " rows updated\n" +
+    "• " + resolved + " markets resolved (YES/NO)\n" +
+    (errors > 0 ? "• " + errors + " errors (check logs)\n" : "")
+  );
 }
 
 
