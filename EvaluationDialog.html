@@ -1,0 +1,494 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <base target="_top">
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      font-family: Arial, sans-serif; font-size: 13px;
+      margin: 10px 12px; color: #222;
+    }
+    h3 { margin: 0 0 8px; font-size: 15px; }
+
+    .section {
+      background: #f5f5f5; border-radius: 4px;
+      padding: 8px 10px; margin-bottom: 8px;
+    }
+    .section-title {
+      font-weight: bold; font-size: 10px; text-transform: uppercase;
+      letter-spacing: .5px; color: #777; margin-bottom: 5px;
+    }
+    label { display: block; font-size: 12px; color: #444; margin-bottom: 2px; }
+
+    input[type=text], input[type=number], select, textarea {
+      width: 100%; padding: 4px 6px; border: 1px solid #ccc;
+      border-radius: 3px; font-size: 13px; margin-bottom: 5px;
+    }
+    input[readonly], input[disabled] { background: #e8e8e8; color: #555; }
+    textarea { resize: vertical; height: 50px; }
+
+    .row2 { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+    .row3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px; }
+
+    /* Quality score badge */
+    .badge {
+      display: inline-block; border-radius: 10px;
+      padding: 2px 10px; font-size: 12px; font-weight: bold; color: #fff;
+    }
+    .badge.low  { background: #ea4335; }
+    .badge.med  { background: #f9a825; }
+    .badge.high { background: #34a853; }
+
+    /* Buttons */
+    button {
+      border: none; border-radius: 3px; cursor: pointer;
+      font-size: 13px; padding: 5px 12px;
+    }
+    button:disabled { opacity: .55; cursor: default; }
+    .btn-primary   { background: #1a73e8; color: #fff; }
+    .btn-secondary { background: #e0e0e0; color: #222; }
+    .btn-sm        { font-size: 11px; padding: 3px 9px; }
+    .btn-green     { background: #34a853; color: #fff; }
+    .btn-claude    {
+      background: #5f3dc4; color: #fff;
+      width: 100%; padding: 7px; font-size: 13px;
+      font-weight: bold; letter-spacing: .2px;
+      margin-top: 4px;
+    }
+    .btn-claude:hover:not(:disabled) { background: #4c2fa3; }
+
+    /* Claude result panel */
+    .claude-panel {
+      display: none; margin-top: 8px;
+      border: 1px solid #c5b9f7; border-radius: 4px;
+      background: #f3f0ff; padding: 8px 10px;
+    }
+    .claude-panel.visible { display: block; }
+    .claude-panel .c-label {
+      font-size: 10px; font-weight: bold; text-transform: uppercase;
+      color: #7c5cbf; letter-spacing: .4px; margin-bottom: 2px;
+    }
+    .claude-panel .c-value {
+      font-size: 12px; color: #222; margin-bottom: 6px;
+      line-height: 1.4;
+    }
+    .claude-panel .c-risk {
+      font-size: 11px; color: #c0392b; background: #fdecea;
+      border-radius: 3px; padding: 4px 7px; margin-top: 4px;
+    }
+    .conf-badge {
+      display: inline-block; border-radius: 3px; font-size: 10px;
+      font-weight: bold; padding: 1px 6px; margin-left: 6px;
+    }
+    .conf-HIGH   { background: #d4edda; color: #155724; }
+    .conf-MEDIUM { background: #fff3cd; color: #856404; }
+    .conf-LOW    { background: #f8d7da; color: #721c24; }
+
+    .flags { font-size: 11px; color: #666; margin-top: 1px; }
+    .status-line { font-size: 11px; color: #888; margin-top: 3px; min-height: 14px; }
+    .error-line  { font-size: 11px; color: #c0392b; margin-top: 3px; }
+
+    a { color: #1a73e8; font-size: 12px; }
+
+    .actions {
+      display: flex; gap: 8px; justify-content: flex-end;
+      margin-top: 8px; padding-top: 6px;
+      border-top: 1px solid #e0e0e0;
+    }
+  </style>
+</head>
+<body>
+<script>
+  var alertData = <?!= alertData ?>;
+
+  // ── Init ──────────────────────────────────────────────────────────────────
+
+  function init() {
+    document.getElementById("alertTs").value    = alertData.alertTimestamp || "";
+    document.getElementById("marketName").value = alertData.marketName     || "";
+    document.getElementById("url").value        = alertData.url            || "";
+    document.getElementById("category").value   = alertData.category       || "";
+    document.getElementById("direction").value  = alertData.direction      || "";
+    document.getElementById("alertPrice").value = alertData.priceAfter     || "";
+    document.getElementById("qualityScore").value = alertData.qualityScore || "";
+
+    // Quality score badge
+    var score = parseInt(alertData.qualityScore) || 0;
+    var badge = document.getElementById("scoreBadge");
+    badge.textContent = score + "/100";
+    badge.className = "badge " + (score >= 65 ? "high" : score >= 40 ? "med" : "low");
+    document.getElementById("qualityFlags").textContent = alertData.qualityFlags || "";
+
+    // Market link
+    if (alertData.url) {
+      var link = document.getElementById("marketLink");
+      link.href = alertData.url;
+      link.textContent = "Open on Polymarket ↗";
+    }
+
+    updateSubclassOptions();
+  }
+
+  // ── Classification dropdowns ──────────────────────────────────────────────
+
+  function updateSubclassOptions(selectedValue) {
+    var cls = document.getElementById("classification").value;
+    var sub = document.getElementById("subClassification");
+    sub.innerHTML = "";
+
+    var opts = {
+      SENTIMENT: [
+        "PROCEDURAL_DELAY", "NEGATIVE_COMMENTARY", "UNFAVOURABLE_POLL",
+        "PERSONAL_CONDUCT", "LEAKED_DOCUMENT"
+      ],
+      STRUCTURAL: [
+        "HARD_OUTCOME", "REGULATORY_RULING", "FACTUAL_REVELATION", "TIMELINE_COMPRESSION"
+      ],
+      UNCLEAR: ["UNCLEAR"]
+    };
+
+    var list = (opts[cls] || []).concat(["UNCLEAR"]);
+    list.forEach(function(o) {
+      var opt = document.createElement("option");
+      opt.value = o;
+      opt.textContent = o.replace(/_/g, " ");
+      if (selectedValue && o === selectedValue) opt.selected = true;
+      sub.appendChild(opt);
+    });
+  }
+
+  // ── Fetch current price ───────────────────────────────────────────────────
+
+  function fetchCurrentPrice() {
+    var url = document.getElementById("url").value.trim();
+    if (!url) { alert("No URL set for this market."); return; }
+
+    var match = url.match(/polymarket\.com\/event\/([^/?#]+)/);
+    if (!match) { alert("Could not parse market slug from URL:\n" + url); return; }
+
+    var slug     = match[1];
+    var question = document.getElementById("marketName").value.trim();
+    var btn      = document.getElementById("fetchBtn");
+
+    btn.textContent = "Fetching…";
+    btn.disabled = true;
+
+    google.script.run
+      .withSuccessHandler(function(result) {
+        btn.textContent = "Fetch price";
+        btn.disabled = false;
+        if (result && result.price != null) {
+          document.getElementById("priceAtEval").value = parseFloat(result.price).toFixed(1);
+          computeEdge();
+        } else {
+          alert("Price fetch failed: " + (result ? result.error : "unknown"));
+        }
+      })
+      .withFailureHandler(function(err) {
+        btn.textContent = "Fetch price";
+        btn.disabled = false;
+        alert("Error: " + err.message);
+      })
+      .fetchMarketPrice(slug, question);
+  }
+
+  // ── Edge calculation ──────────────────────────────────────────────────────
+
+  function computeEdge() {
+    var p  = parseFloat(document.getElementById("priceAtEval").value);
+    var fv = parseFloat(document.getElementById("fairValue").value);
+    if (!isNaN(p) && !isNaN(fv)) {
+      var dir  = document.getElementById("direction").value;
+      var edge = (dir === "DROP") ? fv - p : p - fv;
+      document.getElementById("edgeAtEval").value = edge.toFixed(1);
+    }
+  }
+
+  // ── Claude analysis ───────────────────────────────────────────────────────
+
+  function runClaudeAnalysis() {
+    var btn    = document.getElementById("claudeBtn");
+    var panel  = document.getElementById("claudePanel");
+    var errDiv = document.getElementById("claudeError");
+
+    btn.textContent = "✦ Analyzing…";
+    btn.disabled    = true;
+    panel.classList.remove("visible");
+    errDiv.textContent = "";
+
+    var payload = {
+      question:     alertData.marketName,
+      marketName:   alertData.marketName,
+      category:     alertData.category,
+      direction:    alertData.direction,
+      priceBefore:  alertData.priceBefore,
+      priceAfter:   alertData.priceAfter,
+      changePts:    alertData.changePts,
+      volMultiple:  alertData.volMultiple,
+      qualityScore: alertData.qualityScore,
+      qualityFlags: alertData.qualityFlags,
+      newsContext:  document.getElementById("newsContext").value.trim(),
+    };
+
+    google.script.run
+      .withSuccessHandler(function(result) {
+        btn.textContent = "✦ Analyze with Claude";
+        btn.disabled    = false;
+
+        if (result.error) {
+          errDiv.textContent = "Claude error: " + result.error;
+          return;
+        }
+
+        // ── Pre-fill fields ───────────────────────────────────────────────
+        if (result.classification) {
+          document.getElementById("classification").value = result.classification;
+          updateSubclassOptions(result.subClassification);
+        }
+        if (result.fairValue) {
+          document.getElementById("fairValue").value = result.fairValue;
+          computeEdge();
+        }
+        if (result.thesis) {
+          document.getElementById("thesis").value = result.thesis;
+        }
+        if (result.newsSourceGuess) {
+          var ns = document.getElementById("newsSource");
+          for (var i = 0; i < ns.options.length; i++) {
+            if (ns.options[i].value === result.newsSourceGuess) {
+              ns.selectedIndex = i; break;
+            }
+          }
+        }
+
+        // ── Populate result panel ─────────────────────────────────────────
+        var confClass = result.confidence || "LOW";
+        document.getElementById("cClassification").textContent =
+          (result.classification || "—") +
+          (result.subClassification ? " › " + result.subClassification.replace(/_/g, " ") : "");
+        document.getElementById("cConfBadge").textContent   = confClass;
+        document.getElementById("cConfBadge").className     = "conf-badge conf-" + confClass;
+        document.getElementById("cFairValue").textContent   =
+          result.fairValue ? result.fairValue + "¢" : "—";
+        document.getElementById("cFVReasoning").textContent = result.fairValueReasoning || "";
+        document.getElementById("cRisk").textContent        =
+          result.keyRisk ? "⚠ " + result.keyRisk : "";
+
+        panel.classList.add("visible");
+      })
+      .withFailureHandler(function(err) {
+        btn.textContent = "✦ Analyze with Claude";
+        btn.disabled    = false;
+        errDiv.textContent = "Failed: " + err.message;
+      })
+      .analyzeWithClaude(payload);
+  }
+
+  // ── Submit ────────────────────────────────────────────────────────────────
+
+  function submit() {
+    var data = {
+      alertTimestamp:    document.getElementById("alertTs").value,
+      marketName:        document.getElementById("marketName").value,
+      url:               document.getElementById("url").value,
+      category:          document.getElementById("category").value,
+      direction:         document.getElementById("direction").value,
+      alertPrice:        document.getElementById("alertPrice").value,
+      priceAtEval:       document.getElementById("priceAtEval").value,
+      edgeAtEval:        document.getElementById("edgeAtEval").value,
+      fairValue:         document.getElementById("fairValue").value,
+      classification:    document.getElementById("classification").value,
+      subClassification: document.getElementById("subClassification").value,
+      newsSource:        document.getElementById("newsSource").value,
+      verdict:           document.getElementById("verdict").value,
+      thesis:            document.getElementById("thesis").value,
+      qualityScore:      document.getElementById("qualityScore").value,
+    };
+
+    if (!data.classification || !data.verdict) {
+      alert("Please fill in Classification and Verdict before saving.");
+      return;
+    }
+
+    var btn = document.getElementById("submitBtn");
+    btn.textContent = "Saving…";
+    btn.disabled    = true;
+
+    google.script.run
+      .withSuccessHandler(function() { google.script.host.close(); })
+      .withFailureHandler(function(err) {
+        btn.textContent = "Save Evaluation";
+        btn.disabled    = false;
+        alert("Save failed: " + err.message);
+      })
+      .logEvaluation(data);
+  }
+
+  window.onload = init;
+</script>
+
+<h3>Evaluate Market</h3>
+
+<!-- ── Market info ──────────────────────────────────────────────────────────── -->
+<div class="section">
+  <div class="section-title">Market</div>
+  <label>Market Name</label>
+  <input type="text" id="marketName" readonly>
+
+  <div class="row3">
+    <div>
+      <label>Category</label>
+      <input type="text" id="category" readonly>
+    </div>
+    <div>
+      <label>Direction</label>
+      <input type="text" id="direction" readonly>
+    </div>
+    <div style="padding-top:18px">
+      <a id="marketLink" href="#" target="_blank">Open on Polymarket ↗</a>
+    </div>
+  </div>
+
+  <label>Alert Timestamp</label>
+  <input type="text" id="alertTs" readonly>
+  <input type="hidden" id="url">
+</div>
+
+<!-- ── Quality score ────────────────────────────────────────────────────────── -->
+<div class="section">
+  <div class="section-title">Quality Score</div>
+  <span id="scoreBadge" class="badge low">—</span>
+  <input type="hidden" id="qualityScore">
+  <div class="flags" id="qualityFlags"></div>
+</div>
+
+<!-- ── Prices ───────────────────────────────────────────────────────────────── -->
+<div class="section">
+  <div class="section-title">Prices</div>
+  <div class="row2">
+    <div>
+      <label>Alert Price (¢)</label>
+      <input type="number" id="alertPrice" step="0.1" readonly>
+    </div>
+    <div>
+      <label>Price at Evaluation (¢)</label>
+      <div style="display:flex;gap:5px;align-items:center">
+        <input type="number" id="priceAtEval" step="0.1" oninput="computeEdge()"
+               style="margin-bottom:0;flex:1">
+        <button class="btn-sm btn-green" id="fetchBtn" type="button"
+                onclick="fetchCurrentPrice()">Fetch price</button>
+      </div>
+    </div>
+  </div>
+  <div class="row2" style="margin-top:5px">
+    <div>
+      <label>Fair Value Estimate (¢)</label>
+      <input type="number" id="fairValue" step="0.1" oninput="computeEdge()"
+             placeholder="your estimate">
+    </div>
+    <div>
+      <label>Edge at Evaluation (pts)</label>
+      <input type="number" id="edgeAtEval" step="0.1" readonly>
+    </div>
+  </div>
+</div>
+
+<!-- ── Claude analysis ──────────────────────────────────────────────────────── -->
+<div class="section">
+  <div class="section-title">AI Analysis</div>
+
+  <label>Context / News
+    <span style="font-weight:normal;color:#888;font-size:11px">
+      — paste the headline, tweet, or Polymarket comment that drove the move
+    </span>
+  </label>
+  <textarea id="newsContext"
+    placeholder="e.g. 'Reuters: Court delays ruling on X case until Q3' or paste a Polymarket comment…"
+    style="height:60px"></textarea>
+
+  <button class="btn-claude" id="claudeBtn" type="button" onclick="runClaudeAnalysis()">
+    ✦ Analyze with Claude
+  </button>
+  <div class="error-line" id="claudeError"></div>
+
+  <!-- Result panel — hidden until analysis runs -->
+  <div class="claude-panel" id="claudePanel">
+    <div class="c-label">
+      Classification
+      <span id="cConfBadge" class="conf-badge conf-LOW">—</span>
+    </div>
+    <div class="c-value" id="cClassification">—</div>
+
+    <div class="c-label">Fair Value</div>
+    <div class="c-value" id="cFairValue">—</div>
+
+    <div class="c-label">Reasoning</div>
+    <div class="c-value" id="cFVReasoning"></div>
+
+    <div class="c-risk" id="cRisk"></div>
+
+    <div class="status-line" style="margin-top:6px;font-style:italic;color:#7c5cbf">
+      Fields pre-filled above — review and edit before saving.
+    </div>
+  </div>
+</div>
+
+<!-- ── Classification ───────────────────────────────────────────────────────── -->
+<div class="section">
+  <div class="section-title">Classification</div>
+  <div class="row2">
+    <div>
+      <label>Classification</label>
+      <select id="classification" onchange="updateSubclassOptions()">
+        <option value="">-- select --</option>
+        <option value="SENTIMENT">SENTIMENT</option>
+        <option value="STRUCTURAL">STRUCTURAL</option>
+        <option value="UNCLEAR">UNCLEAR</option>
+      </select>
+    </div>
+    <div>
+      <label>Sub-classification</label>
+      <select id="subClassification">
+        <option value="">-- select classification first --</option>
+      </select>
+    </div>
+  </div>
+  <label>News Source</label>
+  <select id="newsSource">
+    <option value="">-- select --</option>
+    <option value="POLYMARKET_COMMENTS">POLYMARKET_COMMENTS</option>
+    <option value="MAINSTREAM_NEWS">MAINSTREAM_NEWS</option>
+    <option value="TWITTER">TWITTER</option>
+    <option value="OTHER">OTHER</option>
+  </select>
+</div>
+
+<!-- ── Decision ─────────────────────────────────────────────────────────────── -->
+<div class="section">
+  <div class="section-title">Decision</div>
+  <div class="row2">
+    <div>
+      <label>Verdict</label>
+      <select id="verdict">
+        <option value="">-- select --</option>
+        <option value="GO">GO</option>
+        <option value="WEAK_GO">WEAK_GO</option>
+        <option value="PASS">PASS</option>
+      </select>
+    </div>
+  </div>
+  <label>Thesis</label>
+  <textarea id="thesis"
+    placeholder="e.g. Procedural delay — market overreacted, ruling expected within 2 weeks and outcome unchanged"
+    style="height:54px"></textarea>
+</div>
+
+<div class="actions">
+  <button class="btn-secondary" type="button"
+          onclick="google.script.host.close()">Cancel</button>
+  <button class="btn-primary" id="submitBtn" type="button"
+          onclick="submit()">Save Evaluation</button>
+</div>
+
+</body>
+</html>

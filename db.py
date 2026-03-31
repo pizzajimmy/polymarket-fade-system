@@ -70,6 +70,8 @@ CREATE TABLE IF NOT EXISTS scan_alerts (
     price_at_alert  REAL,
     drop_magnitude  REAL,
     ambient_vol     REAL,
+    quality_score   INTEGER DEFAULT 0,
+    quality_flags   TEXT DEFAULT '',
     fired_at        TEXT DEFAULT (datetime('now'))
 );
 
@@ -82,6 +84,11 @@ def init_db():
     """Create tables if they don't exist."""
     with conn() as c:
         c.executescript(SCHEMA)
+        try:
+            c.execute("ALTER TABLE scan_alerts ADD COLUMN quality_score INTEGER DEFAULT 0")
+            c.execute("ALTER TABLE scan_alerts ADD COLUMN quality_flags TEXT DEFAULT ''")
+        except Exception:
+            pass  # columns already exist
     log.info(f"Database ready: {DB_PATH.resolve()}")
 
 
@@ -294,13 +301,32 @@ def alert_cooldown_passed(condition_id: str, alert_type: str,
 
 def log_alert(condition_id: str, alert_type: str,
               price: float = None, drop: float = None,
-              ambient_vol: float = None) -> None:
+              ambient_vol: float = None,
+              quality_score: int = 0, quality_flags: list = None) -> None:
+    flags_str = ", ".join(quality_flags) if quality_flags else ""
     with conn() as c:
         c.execute("""
             INSERT INTO scan_alerts
-                (condition_id, alert_type, price_at_alert, drop_magnitude, ambient_vol)
-            VALUES (?, ?, ?, ?, ?)
-        """, (condition_id, alert_type, price, drop, ambient_vol))
+                (condition_id, alert_type, price_at_alert, drop_magnitude,
+                 ambient_vol, quality_score, quality_flags)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+        """, (condition_id, alert_type, price, drop, ambient_vol,
+              quality_score, flags_str))
+
+
+def get_recent_alerts(hours_min: float = 1.5, hours_max: float = 3.0) -> list[dict]:
+    """Return alerts fired between hours_min and hours_max ago."""
+    with conn() as c:
+        rows = c.execute("""
+            SELECT a.condition_id, a.alert_type, a.price_at_alert,
+                   a.fired_at, a.ambient_vol, m.question, m.url, m.category
+            FROM scan_alerts a
+            JOIN markets m ON m.condition_id = a.condition_id
+            WHERE a.fired_at >= datetime('now', ? || ' hours')
+              AND a.fired_at <= datetime('now', ? || ' hours')
+            ORDER BY a.fired_at DESC
+        """, (f'-{hours_max}', f'-{hours_min}')).fetchall()
+    return [dict(r) for r in rows]
 
 
 # ── Stats / diagnostics ───────────────────────────────────────────────────────

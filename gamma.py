@@ -38,6 +38,101 @@ def _get(path: str, params: dict = None, retries: int = 3) -> dict | list:
     return []
 
 
+# Polymarket's API category strings → our internal labels.
+# Anything not in this map falls back to _infer_category().
+_API_CATEGORY_MAP: dict[str, str] = {
+    # Politics / world events
+    "politics":              "politics",
+    "world":                 "politics",
+    "news":                  "politics",
+    "entertainment":         "politics",
+    "pop culture":           "politics",
+    "culture":               "politics",
+    "tv & movies":           "politics",
+    "movies":                "politics",
+    "music":                 "politics",
+    "celebrities":           "politics",
+    # Awards — route to sports only if sports-specific; generic awards → politics.
+    # We don't put "awards" here so the keyword fallback can disambiguate.
+    "oscars":                "politics",
+    "grammys":               "politics",
+    "emmys":                 "politics",
+    # Macro / finance
+    "business & finance":    "macro",
+    "finance":               "macro",
+    "financial markets":     "macro",
+    "economics":             "macro",
+    "commodities":           "macro",
+    "climate & weather":     "macro",
+    "climate":               "macro",
+    # Crypto
+    "crypto":                "crypto",
+    "cryptocurrency":        "crypto",
+    "defi":                  "crypto",
+    "nft":                   "crypto",
+    # Science / tech / health
+    "science":               "science",
+    "science & tech":        "science",
+    "tech":                  "science",
+    "tech & ai":             "science",
+    "ai":                    "science",
+    "health":                "science",
+    "medicine":              "science",
+    # Sports — every sport-specific category Polymarket uses
+    "sports":                "sports",
+    "soccer":                "sports",
+    "football":              "sports",
+    "basketball":            "sports",
+    "baseball":              "sports",
+    "hockey":                "sports",
+    "golf":                  "sports",
+    "tennis":                "sports",
+    "mma":                   "sports",
+    "ufc":                   "sports",
+    "boxing":                "sports",
+    "racing":                "sports",
+    "nascar":                "sports",
+    "formula 1":             "sports",
+    "f1":                    "sports",
+    "cricket":               "sports",
+    "rugby":                 "sports",
+    "esports":               "sports",
+    "gaming":                "sports",
+    "olympics":              "sports",
+    "nfl":                   "sports",
+    "nba":                   "sports",
+    "nhl":                   "sports",
+    "mlb":                   "sports",
+    "pga":                   "sports",
+    "ncaa":                  "sports",
+}
+
+
+def _resolve_category(m: dict) -> str:
+    """
+    Use Polymarket's own category field when available and recognised,
+    but always let keyword inference override if the API label is vague
+    (e.g. Polymarket calls baseball award markets "Entertainment").
+    """
+    question = m.get("question", "")
+
+    # Keyword inference is authoritative for sports — it catches award/league
+    # patterns that the API often miscategorises as Entertainment/Awards.
+    kw_cat = _infer_category(question)
+    if kw_cat == "sports":
+        return "sports"
+
+    # For everything else, prefer the API's category label when we recognise it.
+    raw = (m.get("category") or m.get("groupCategory") or "").strip()
+    if raw:
+        mapped = _API_CATEGORY_MAP.get(raw.lower())
+        if mapped:
+            return mapped
+
+    # Fall back to full keyword inference for non-sports categories.
+    return kw_cat
+
+
 def _parse_market(m: dict) -> dict | None:
     """
     Extract the fields we care about from a raw Gamma API market object.
@@ -67,7 +162,11 @@ def _parse_market(m: dict) -> dict | None:
         token_id_yes = token_ids[0] if token_ids else ""
 
         slug = m.get("slug", "")
-        url  = f"https://polymarket.com/event/{slug}" if slug else ""
+        # Multi-outcome markets belong to a parent event; use eventSlug for the
+        # URL so the link opens the full event page rather than a dead route.
+        event_slug = m.get("eventSlug") or m.get("groupSlug") or ""
+        url_slug = event_slug if event_slug else slug
+        url  = f"https://polymarket.com/event/{url_slug}" if url_slug else ""
 
         # volume field was renamed from volume24hr to volume in the Gamma API
         volume = float(m.get("volume24hr") or m.get("volume") or 0)
@@ -82,7 +181,7 @@ def _parse_market(m: dict) -> dict | None:
             "volume_24h":    volume,
             "liquidity":     float(m.get("liquidity", 0) or 0),
             "end_date":      m.get("endDate", ""),
-            "category":      _infer_category(m.get("question", "")),
+            "category":      _resolve_category(m),
         }
     except Exception as e:
         log.warning(f"Skipping market {m.get('conditionId','?')[:16]}: {type(e).__name__}: {e}")
@@ -95,8 +194,14 @@ def _infer_category(question: str) -> str:
     Used to apply the right source-reliability weights later.
     """
     q = question.lower()
-    if any(w in q for w in ["bitcoin", "btc", "eth", "crypto", "token", "defi",
-                             "blockchain", "solana", "xrp", "coinbase"]):
+    if any(w in q for w in [
+        "bitcoin", "btc", "eth", "ethereum", "crypto", "token", "defi",
+        "blockchain", "solana", "xrp", "coinbase", "binance", "nft",
+        "web3", "dao", "staking", "airdrop", "whitelist",
+        # DeFi / ICO / IDO patterns
+        "fdv", "public sale", "token sale", "token launch", "token price",
+        "committed to the", "protocol sale", "presale", "pre-sale",
+    ]):
         return "crypto"
     if any(w in q for w in ["fed", "inflation", "gdp", "rate", "recession", "cpi",
                             "fomc", "interest rate", "tariff", "unemployment",
@@ -124,6 +229,15 @@ def _infer_category(question: str) -> str:
         "fc ", " fc", "united", "city fc", "athletic club", "sporting ",
         "coach", "manager", "transfer", "draft pick", "mvp", "award",
         "season wins", "leading scorer", "top scorer",
+        # Baseball / MLB awards (NL/AL prefix catches these without matching "AL" generally)
+        "nl comeback", "al comeback", "nl manager", "al manager",
+        "nl cy young", "al cy young", "nl mvp", "al mvp",
+        "nl rookie", "al rookie", "nl gold glove", "al gold glove",
+        "comeback player of the year", "manager of the year",
+        "cy young", "gold glove", "silver slugger", "batting title",
+        "home run leader", "saves leader", "strikeout leader",
+        # Generic award patterns that are always sports in this context
+        "player of the year", "pitcher of the year", "hitter of the year",
     ]):
         return "sports"
     return "politics"
