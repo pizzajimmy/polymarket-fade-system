@@ -94,7 +94,8 @@ def send_telegram(message: str) -> bool:
 
 
 def format_drop_alert(market: dict, drop: float, ambient_vol: float | None,
-                      vol_spike: float, prev_price: float) -> str:
+                      vol_spike: float, prev_price: float,
+                      quality_score: int = 0, quality_flags: list = None) -> str:
     q = market["question"][:90] + ("…" if len(market["question"]) > 90 else "")
     cat = market.get("category", "unknown")
     vol_str = f"{vol_spike:.1f}× avg volume" if vol_spike > 1 else ""
@@ -104,6 +105,9 @@ def format_drop_alert(market: dict, drop: float, ambient_vol: float | None,
         amb_str = f"\nAmbient vol: {ambient_vol:.1f} pts/day{amb_flag}"
     url = market.get("url", "")
     url_tag = f'\n<a href="{url}">Open on Polymarket</a>' if url else ""
+    score_str = f"\n\n<b>Quality score: {quality_score}/100</b>"
+    if quality_flags:
+        score_str += f"\n{' · '.join(quality_flags)}"
     return (
         f"📉 <b>Price drop alert — {cat}</b>\n"
         f"<i>{q}</i>\n\n"
@@ -111,12 +115,14 @@ def format_drop_alert(market: dict, drop: float, ambient_vol: float | None,
         f"Volume:  ${market['volume_24h']:,.0f} 24h  {vol_str}\n"
         f"Liquidity: ${market['liquidity']:,.0f}"
         f"{amb_str}"
+        f"{score_str}"
         f"{url_tag}"
     )
 
 
 def format_spike_alert(market: dict, rise: float, ambient_vol: float | None,
-                       vol_spike: float, prev_price: float) -> str:
+                       vol_spike: float, prev_price: float,
+                       quality_score: int = 0, quality_flags: list = None) -> str:
     q = market["question"][:90] + ("…" if len(market["question"]) > 90 else "")
     cat = market.get("category", "unknown")
     amb_str = ""
@@ -125,6 +131,9 @@ def format_spike_alert(market: dict, rise: float, ambient_vol: float | None,
         amb_str = f"\nAmbient vol: {ambient_vol:.1f} pts/day{amb_flag}"
     url = market.get("url", "")
     url_tag = f'\n<a href="{url}">Open on Polymarket</a>' if url else ""
+    score_str = f"\n\n<b>Quality score: {quality_score}/100</b>"
+    if quality_flags:
+        score_str += f"\n{' · '.join(quality_flags)}"
     return (
         f"📈 <b>Price spike alert — {cat}</b>\n"
         f"<i>{q}</i>\n\n"
@@ -133,6 +142,7 @@ def format_spike_alert(market: dict, rise: float, ambient_vol: float | None,
         f"Liquidity: ${market['liquidity']:,.0f}\n"
         f"<i>Consider buying NO if spike is sentiment-driven speculation.</i>"
         f"{amb_str}"
+        f"{score_str}"
         f"{url_tag}"
     )
 
@@ -196,6 +206,7 @@ def find_lagging_correlated(market: dict, direction: str) -> list[dict]:
                     AND p.polled_at = t.latest
                 WHERE m.condition_id != ?
                   AND m.liquidity >= ?
+                  AND (m.category IS NULL OR m.category != 'sports')
                   AND p.price > 1
                   AND p.price < 99
             """, (trigger_cid, MIN_LIQUIDITY)).fetchall()
@@ -312,7 +323,92 @@ def _days_to_resolution(end_date_str: str) -> int | None:
         return None
 
 
+def _alert_quality_score(market: dict, analysis: dict, alert_type: str) -> tuple[int, list[str]]:
+    """
+    Score 0-100. Higher = more likely to be a genuine overcorrection worth evaluating.
+    Returns (score, flags) where flags are reasons the score is high or low.
+    """
+    score = 0
+    flags = []
+
+    price = market.get("yes_price", 50)
+    ambient_vol = analysis.get("ambient_vol") or 0
+    vol_spike = analysis.get("vol_spike", 1.0)
+    liquidity = market.get("liquidity", 0)
+    category = market.get("category", "")
+    drop = abs(analysis.get("drop", 0)) if alert_type == "DROP" else abs(analysis.get("rise", 0))
+    days = _days_to_resolution(market.get("end_date", ""))
+
+    # Liquidity (max 20 pts)
+    if liquidity >= 10000:
+        score += 20; flags.append("high liquidity")
+    elif liquidity >= 5000:
+        score += 15
+    elif liquidity >= 2000:
+        score += 8
+    else:
+        flags.append("⚠ thin liquidity")
+
+    # Volume spike strength (max 20 pts)
+    if vol_spike >= 5.0:
+        score += 20; flags.append(f"{vol_spike:.1f}× vol spike")
+    elif vol_spike >= 3.0:
+        score += 15; flags.append(f"{vol_spike:.1f}× vol spike")
+    elif vol_spike >= 1.8:
+        score += 8
+
+    # Ambient volatility — high = retail dominated = better fades (max 15 pts)
+    if ambient_vol >= 7:
+        score += 15; flags.append("high retail vol")
+    elif ambient_vol >= 4:
+        score += 10
+    elif ambient_vol >= 2:
+        score += 5
+    else:
+        flags.append("low ambient vol")
+
+    # Move magnitude (max 15 pts)
+    if drop >= 30:
+        score += 15; flags.append(f"{drop:.0f}pt move")
+    elif drop >= 20:
+        score += 10; flags.append(f"{drop:.0f}pt move")
+    elif drop >= 15:
+        score += 5
+
+    # Category (max 15 pts) — politics/macro fade best
+    if category in ("politics", "macro"):
+        score += 15
+    elif category == "science":
+        score += 8
+    elif category == "crypto":
+        score += 5; flags.append("crypto — noisy")
+    else:
+        flags.append(f"category: {category}")
+
+    # Days to resolution (max 15 pts) — sweet spot 14-90 days
+    if days is None:
+        score += 8  # unknown, assume ok
+    elif 14 <= days <= 90:
+        score += 15
+    elif 7 <= days < 14:
+        score += 8; flags.append(f"short window ({days}d)")
+    elif days > 90:
+        score += 10
+    else:
+        score -= 10; flags.append(f"⚠ only {days}d remaining")
+
+    # Price location — extremes are harder to fade
+    if alert_type == "DROP" and price < 5:
+        score -= 15; flags.append("⚠ near zero — time decay risk")
+    elif alert_type == "SPIKE" and price > 95:
+        score -= 15; flags.append("⚠ near ceiling")
+
+    return max(0, min(100, score)), flags
+
+
 def _is_tradeable(market: dict) -> bool:
+    if market.get("category") == "sports":
+        return False
     if market["liquidity"] < MIN_LIQUIDITY:
         return False
     if market["volume_24h"] < MIN_VOLUME_24H:
@@ -365,6 +461,69 @@ def analyse_market(market: dict) -> dict:
     }
 
 
+def run_followup_check(dry_run: bool = False) -> None:
+    """
+    For every alert fired 1.5-3 hours ago, check current price vs alert price.
+    If market moved further in alert direction (>3pts), send a THESIS WEAKENING message.
+    If market recovered (>5pts back), send a THESIS STRENGTHENING message.
+    """
+    try:
+        alerts = db.get_recent_alerts(hours_min=1.5, hours_max=3.0)
+    except Exception as e:
+        log.error(f"[followup] DB query failed: {e}")
+        return
+
+    for alert in alerts:
+        cid = alert["condition_id"]
+        alert_price = alert["price_at_alert"]
+        alert_type = alert["alert_type"]
+
+        if alert_price is None:
+            continue
+
+        current_price = db.latest_price(cid)
+        if current_price is None:
+            continue
+
+        delta = current_price - alert_price  # positive = price rose since alert
+
+        if alert_type == "DROP":
+            continued_move = delta < -3    # kept dropping
+            recovering = delta > 5         # bouncing back
+        else:  # SPIKE
+            continued_move = delta > 3     # kept rising
+            recovering = delta < -5        # falling back
+
+        if continued_move:
+            msg = (
+                f"⚠️ <b>Thesis weakening — {alert['category']}</b>\n"
+                f"<i>{alert['question'][:80]}</i>\n\n"
+                f"Alert price: {alert_price:.1f}¢  →  Now: {current_price:.1f}¢  "
+                f"({delta:+.1f}pts since alert)\n"
+                f"<i>Market continuing to move in alert direction — "
+                f"may be structural repricing, not overcorrection.</i>\n"
+                f'<a href="{alert["url"]}">Check market</a>'
+            )
+            if not dry_run:
+                send_telegram(msg)
+            else:
+                log.info(f"[followup DRY RUN] Weakening: {alert['question'][:50]}")
+
+        elif recovering:
+            msg = (
+                f"✅ <b>Thesis strengthening — {alert['category']}</b>\n"
+                f"<i>{alert['question'][:80]}</i>\n\n"
+                f"Alert price: {alert_price:.1f}¢  →  Now: {current_price:.1f}¢  "
+                f"({delta:+.1f}pts since alert)\n"
+                f"<i>Market recovering from the move — overcorrection thesis intact.</i>\n"
+                f'<a href="{alert["url"]}">Check market</a>'
+            )
+            if not dry_run:
+                send_telegram(msg)
+            else:
+                log.info(f"[followup DRY RUN] Strengthening: {alert['question'][:50]}")
+
+
 def run_scan(dry_run: bool = False) -> dict:
     """
     Full scan cycle. Returns summary dict with counts.
@@ -411,6 +570,10 @@ def run_scan(dry_run: bool = False) -> dict:
                 log.debug(f"Cooldown active — skipping {alert_type} for {market['question'][:40]}")
                 continue
 
+            quality_score, quality_flags = _alert_quality_score(market, analysis, alert_type)
+            log.info(f"[quality] {alert_type} score={quality_score} flags={quality_flags} "
+                     f"for {market['question'][:40]}")
+
             if alert_type == "DROP":
                 msg = format_drop_alert(
                     market,
@@ -418,16 +581,20 @@ def run_scan(dry_run: bool = False) -> dict:
                     analysis["ambient_vol"],
                     analysis["vol_spike"],
                     analysis["prev_price"],
+                    quality_score,
+                    quality_flags,
                 )
                 drop_markets.append({
-                    "question":    market["question"],
-                    "url":         market.get("url", ""),
-                    "price":       market["yes_price"],
-                    "prev_price":  analysis["prev_price"],
-                    "drop":        analysis["drop"],
-                    "ambient_vol": analysis["ambient_vol"],
-                    "vol_spike":   analysis["vol_spike"],
-                    "category":    market.get("category", ""),
+                    "question":      market["question"],
+                    "url":           market.get("url", ""),
+                    "price":         market["yes_price"],
+                    "prev_price":    analysis["prev_price"],
+                    "drop":          analysis["drop"],
+                    "ambient_vol":   analysis["ambient_vol"],
+                    "vol_spike":     analysis["vol_spike"],
+                    "category":      market.get("category", ""),
+                    "quality_score": quality_score,
+                    "quality_flags": quality_flags,
                 })
             elif alert_type == "SPIKE":
                 msg = format_spike_alert(
@@ -436,6 +603,8 @@ def run_scan(dry_run: bool = False) -> dict:
                     analysis["ambient_vol"],
                     analysis["vol_spike"],
                     analysis["prev_price"],
+                    quality_score,
+                    quality_flags,
                 )
 
             if not dry_run:
@@ -443,26 +612,32 @@ def run_scan(dry_run: bool = False) -> dict:
                     # ── Sheets export ──────────────────────────────────────
                     if alert_type == "DROP":
                         log_drop_alert(
-                            market      = market,
-                            drop_pts    = analysis["drop"],
-                            prev_price  = analysis["prev_price"],
-                            vol_spike   = analysis["vol_spike"],
-                            ambient_vol = analysis["ambient_vol"],
+                            market        = market,
+                            drop_pts      = analysis["drop"],
+                            prev_price    = analysis["prev_price"],
+                            vol_spike     = analysis["vol_spike"],
+                            ambient_vol   = analysis["ambient_vol"],
+                            quality_score = quality_score,
+                            quality_flags = quality_flags,
                         )
                     elif alert_type == "SPIKE":
                         log_spike_alert(
-                            market      = market,
-                            spike_pts   = analysis["rise"],
-                            prev_price  = analysis["prev_price"],
-                            vol_spike   = analysis["vol_spike"],
-                            ambient_vol = analysis["ambient_vol"],
+                            market        = market,
+                            spike_pts     = analysis["rise"],
+                            prev_price    = analysis["prev_price"],
+                            vol_spike     = analysis["vol_spike"],
+                            ambient_vol   = analysis["ambient_vol"],
+                            quality_score = quality_score,
+                            quality_flags = quality_flags,
                         )
                     # ── DB log ─────────────────────────────────────────────
                     db.log_alert(
                         market["condition_id"], alert_type,
-                        price       = market["yes_price"],
-                        drop        = analysis.get("drop"),
-                        ambient_vol = analysis.get("ambient_vol"),
+                        price         = market["yes_price"],
+                        drop          = analysis.get("drop"),
+                        ambient_vol   = analysis.get("ambient_vol"),
+                        quality_score = quality_score,
+                        quality_flags = quality_flags,
                     )
                     alerts_fired += 1
 
@@ -480,6 +655,7 @@ def run_scan(dry_run: bool = False) -> dict:
 
             else:
                 log.info(f"[DRY RUN] Would alert {alert_type}: {market['question'][:60]}")
+                log.info(f"[DRY RUN]   Quality score: {quality_score}/100  flags: {quality_flags}")
                 # Still run correlation in dry-run so you can see what it finds
                 lagging = find_lagging_correlated(market, alert_type)
                 if lagging:
@@ -487,6 +663,8 @@ def run_scan(dry_run: bool = False) -> dict:
                     for m in lagging:
                         log.info(f"  {m['price']:.1f}¢  {m['question'][:60]}")
                 alerts_fired += 1
+
+    run_followup_check(dry_run=dry_run)
 
     elapsed = round(time.time() - start, 1)
     summary = {
@@ -508,17 +686,23 @@ def run_scan(dry_run: bool = False) -> dict:
 
 def main():
     parser = argparse.ArgumentParser(description="Polymarket market scanner")
-    parser.add_argument("--loop",    action="store_true", help="Run continuously")
-    parser.add_argument("--lag",     action="store_true",
+    parser.add_argument("--loop",     action="store_true", help="Run continuously")
+    parser.add_argument("--lag",      action="store_true",
                         help="Find stale extreme markets (NO-buy opportunities)")
-    parser.add_argument("--dry-run", action="store_true", help="Analyse only, no Telegram")
-    parser.add_argument("--stats",   action="store_true", help="Print DB stats and exit")
-    parser.add_argument("--prune",   action="store_true", help="Prune old readings and exit")
-    parser.add_argument("--report",  action="store_true",
+    parser.add_argument("--dry-run",  action="store_true", help="Analyse only, no Telegram")
+    parser.add_argument("--stats",    action="store_true", help="Print DB stats and exit")
+    parser.add_argument("--prune",    action="store_true", help="Prune old readings and exit")
+    parser.add_argument("--report",   action="store_true",
                         help="Print current drop candidates as JSON and exit")
+    parser.add_argument("--followup", action="store_true",
+                        help="Run 2-hour followup check and exit")
     args = parser.parse_args()
 
     db.init_db()
+
+    if args.followup:
+        run_followup_check(dry_run=args.dry_run)
+        return
 
     if args.stats:
         import json
