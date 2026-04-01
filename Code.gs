@@ -23,6 +23,7 @@ function onOpen() {
     .addItem("Setup / Fix Sheets",             "setupSheets")
     .addSeparator()
     .addItem("Refresh Prices & Resolution",    "refreshEvaluations")
+    .addItem("Fix Market URLs",                "fixMarketUrls")
     .addItem("Prune Low-Quality Alerts",       "pruneRawAlerts")
     .addSeparator()
     .addItem("Calibration Report",             "runCalibrationReport")
@@ -454,9 +455,10 @@ function logPosition(data) {
 
 function checkMarketStatus(slugOrEventSlug, question) {
   /**
-   * Fetches current YES price and resolution status for a market.
-   * Returns { price, resolution, closed }
+   * Fetches current YES price, resolution status, and correct Polymarket URL.
+   * Returns { price, resolution, closed, correctUrl }
    *   resolution: "PENDING" | "YES" | "NO" | "AMBIGUOUS" | "UNKNOWN"
+   *   correctUrl: eventSlug-based URL if available, otherwise slug-based
    */
   function parsePrices(m) {
     try {
@@ -466,48 +468,55 @@ function checkMarketStatus(slugOrEventSlug, question) {
     } catch (e) { return null; }
   }
 
+  function correctUrlFromMarket(m) {
+    var eSlug = m.eventSlug || m.groupSlug || "";
+    var slug  = m.slug || "";
+    var best  = eSlug || slug;
+    return best ? "https://polymarket.com/event/" + best : "";
+  }
+
   function fetchRaw(slug, asEventSlug) {
     var param = asEventSlug ? "eventSlug" : "slug";
+    // No closed= filter — we need both active and resolved markets
     var url = "https://gamma-api.polymarket.com/markets?" + param + "=" +
-              encodeURIComponent(slug) + "&limit=50&closed=true";
+              encodeURIComponent(slug) + "&limit=50";
     try {
       var resp = UrlFetchApp.fetch(url, { muteHttpExceptions: true });
       if (resp.getResponseCode() !== 200) return null;
       var data = JSON.parse(resp.getContentText());
       if (!data || data.length === 0) return null;
-      if (asEventSlug && question) {
+      if (question) {
         var q = question.toLowerCase();
         for (var i = 0; i < data.length; i++) {
           if ((data[i].question || "").toLowerCase() === q) return data[i];
         }
       }
-      // Return highest-liquidity result as fallback
       data.sort(function(a, b) { return (b.liquidity || 0) - (a.liquidity || 0); });
       return data[0];
     } catch (e) { return null; }
   }
 
   try {
-    // Try as direct market slug first, then as event slug
     var market = fetchRaw(slugOrEventSlug, false) ||
                  fetchRaw(slugOrEventSlug, true);
 
-    if (!market) return { price: null, resolution: "UNKNOWN", closed: false };
+    if (!market) return { price: null, resolution: "UNKNOWN", closed: false, correctUrl: "" };
 
-    var price  = parsePrices(market);
-    var closed = market.closed === true || market.active === false;
+    var price      = parsePrices(market);
+    var closed     = market.closed === true || market.active === false;
+    var correctUrl = correctUrlFromMarket(market);
 
     var resolution = "PENDING";
     if (closed) {
-      if (price === null)      resolution = "AMBIGUOUS";
-      else if (price >= 99)    resolution = "YES";
-      else if (price <= 1)     resolution = "NO";
-      else                     resolution = "AMBIGUOUS";
+      if (price === null)   resolution = "AMBIGUOUS";
+      else if (price >= 99) resolution = "YES";
+      else if (price <= 1)  resolution = "NO";
+      else                  resolution = "AMBIGUOUS";
     }
 
-    return { price: price, resolution: resolution, closed: closed };
+    return { price: price, resolution: resolution, closed: closed, correctUrl: correctUrl };
   } catch (e) {
-    return { price: null, resolution: "UNKNOWN", closed: false };
+    return { price: null, resolution: "UNKNOWN", closed: false, correctUrl: "" };
   }
 }
 
@@ -538,6 +547,7 @@ function refreshEvaluations() {
   var now        = new Date();
   var updated    = 0;
   var resolved   = 0;
+  var urlsFixed  = 0;
   var errors     = 0;
 
   for (var i = 1; i < data.length; i++) {
@@ -551,19 +561,23 @@ function refreshEvaluations() {
 
     try {
       var status = checkMarketStatus(slug, question);
-
-      // Write to Z, AA, AB (cols 26, 27, 28 in 1-indexed sheet notation)
       var rowNum = i + 1;
+
       if (status.price !== null) {
-        sheet.getRange(rowNum, COL_PRICE_NOW  + 1).setValue(parseFloat(status.price.toFixed(1)));
+        sheet.getRange(rowNum, COL_PRICE_NOW + 1).setValue(parseFloat(status.price.toFixed(1)));
       }
       sheet.getRange(rowNum, COL_RESOLUTION + 1).setValue(status.resolution);
       sheet.getRange(rowNum, COL_CHECKED    + 1).setValue(now);
 
+      // Fix URL if the API gave us a better one (eventSlug-based)
+      if (status.correctUrl && status.correctUrl !== url) {
+        sheet.getRange(rowNum, COL_URL + 1).setValue(status.correctUrl);
+        urlsFixed++;
+      }
+
       updated++;
       if (status.resolution === "YES" || status.resolution === "NO") resolved++;
 
-      // Throttle to avoid Gamma API rate limits
       Utilities.sleep(400);
     } catch (e) {
       errors++;
@@ -572,10 +586,81 @@ function refreshEvaluations() {
 
   SpreadsheetApp.getUi().alert(
     "Refresh complete.\n\n" +
-    "• " + updated  + " rows updated\n" +
-    "• " + resolved + " markets resolved (YES/NO)\n" +
-    (errors > 0 ? "• " + errors + " errors (check logs)\n" : "")
+    "• " + updated   + " rows updated\n" +
+    "• " + resolved  + " markets resolved (YES/NO)\n" +
+    (urlsFixed > 0 ? "• " + urlsFixed + " URL(s) corrected\n" : "") +
+    (errors > 0    ? "• " + errors   + " errors (check logs)\n" : "")
   );
+}
+
+
+// ── Fix Market URLs (bulk repair) ────────────────────────────────────────────
+
+function fixMarketUrls() {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var ui = SpreadsheetApp.getUi();
+
+  var resp = ui.alert(
+    "Fix Market URLs",
+    "This will look up each market in the Gamma API and replace any incorrect\n" +
+    "URLs with the correct eventSlug-based URL.\n\n" +
+    "Sheets updated: Raw Alerts (col C), Evaluations Log (col D).\n\n" +
+    "This may take a while for large sheets. Continue?",
+    ui.ButtonSet.YES_NO
+  );
+  if (resp !== ui.Button.YES) return;
+
+  var totalFixed = 0;
+
+  // ── Raw Alerts — URL in col C (index 2), question in col B (index 1) ────────
+  var rawSheet = ss.getSheetByName("Raw Alerts");
+  if (rawSheet) {
+    var rawData = rawSheet.getDataRange().getValues();
+    for (var i = 1; i < rawData.length; i++) {
+      var url      = (rawData[i][2] || "").toString().trim();
+      var question = (rawData[i][1] || "").toString().trim();
+      if (!url) continue;
+
+      var match = url.match(/polymarket\.com\/event\/([^/?#]+)/);
+      if (!match) continue;
+      var slug = match[1];
+
+      try {
+        var status = checkMarketStatus(slug, question);
+        if (status.correctUrl && status.correctUrl !== url) {
+          rawSheet.getRange(i + 1, 3).setValue(status.correctUrl);
+          totalFixed++;
+        }
+        Utilities.sleep(400);
+      } catch (e) { /* skip on error */ }
+    }
+  }
+
+  // ── Evaluations Log — URL in col D (index 3), question in col C (index 2) ──
+  var evalSheet = ss.getSheetByName("Evaluations Log");
+  if (evalSheet) {
+    var evalData = evalSheet.getDataRange().getValues();
+    for (var j = 1; j < evalData.length; j++) {
+      var eUrl      = (evalData[j][3] || "").toString().trim();
+      var eQuestion = (evalData[j][2] || "").toString().trim();
+      if (!eUrl) continue;
+
+      var eMatch = eUrl.match(/polymarket\.com\/event\/([^/?#]+)/);
+      if (!eMatch) continue;
+      var eSlug = eMatch[1];
+
+      try {
+        var eStatus = checkMarketStatus(eSlug, eQuestion);
+        if (eStatus.correctUrl && eStatus.correctUrl !== eUrl) {
+          evalSheet.getRange(j + 1, 4).setValue(eStatus.correctUrl);
+          totalFixed++;
+        }
+        Utilities.sleep(400);
+      } catch (e) { /* skip on error */ }
+    }
+  }
+
+  ui.alert("Fix Market URLs complete.\n\n• " + totalFixed + " URL(s) updated.");
 }
 
 
