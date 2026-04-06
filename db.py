@@ -68,10 +68,13 @@ CREATE TABLE IF NOT EXISTS scan_alerts (
     condition_id    TEXT NOT NULL,
     alert_type      TEXT NOT NULL,       -- DROP | RECOVERY | AMBIENT_HIGH
     price_at_alert  REAL,
+    price_prev_scan REAL,                -- price from the scan just before this alert
     drop_magnitude  REAL,
     ambient_vol     REAL,
     quality_score   INTEGER DEFAULT 0,
     quality_flags   TEXT DEFAULT '',
+    followup_price  REAL,                -- price recorded during 10-min followup
+    followup_at     TEXT,                -- when the followup was recorded
     fired_at        TEXT DEFAULT (datetime('now'))
 );
 
@@ -84,11 +87,18 @@ def init_db():
     """Create tables if they don't exist."""
     with conn() as c:
         c.executescript(SCHEMA)
-        try:
-            c.execute("ALTER TABLE scan_alerts ADD COLUMN quality_score INTEGER DEFAULT 0")
-            c.execute("ALTER TABLE scan_alerts ADD COLUMN quality_flags TEXT DEFAULT ''")
-        except Exception:
-            pass  # columns already exist
+        migrations = [
+            "ALTER TABLE scan_alerts ADD COLUMN quality_score INTEGER DEFAULT 0",
+            "ALTER TABLE scan_alerts ADD COLUMN quality_flags TEXT DEFAULT ''",
+            "ALTER TABLE scan_alerts ADD COLUMN price_prev_scan REAL",
+            "ALTER TABLE scan_alerts ADD COLUMN followup_price REAL",
+            "ALTER TABLE scan_alerts ADD COLUMN followup_at TEXT",
+        ]
+        for sql in migrations:
+            try:
+                c.execute(sql)
+            except Exception:
+                pass  # column already exists
     log.info(f"Database ready: {DB_PATH.resolve()}")
 
 
@@ -172,6 +182,21 @@ def price_history_window(condition_id: str, days: int = 30) -> list[float]:
             ORDER BY polled_at ASC
         """, (condition_id, cutoff)).fetchall()
     return [r["price"] for r in rows]
+
+
+def price_before_current(condition_id: str) -> float | None:
+    """
+    Returns the second-most-recent recorded price — i.e. the price from
+    the scan cycle immediately before this one. Acts as the 'pre-alert'
+    baseline (typically 10-30 min before, depending on poll interval).
+    """
+    with conn() as c:
+        rows = c.execute("""
+            SELECT price FROM price_history
+            WHERE condition_id = ?
+            ORDER BY polled_at DESC LIMIT 2
+        """, (condition_id,)).fetchall()
+    return rows[1]["price"] if len(rows) >= 2 else None
 
 
 def volume_spike(condition_id: str, current_volume: float,
@@ -302,16 +327,47 @@ def alert_cooldown_passed(condition_id: str, alert_type: str,
 def log_alert(condition_id: str, alert_type: str,
               price: float = None, drop: float = None,
               ambient_vol: float = None,
-              quality_score: int = 0, quality_flags: list = None) -> None:
+              quality_score: int = 0, quality_flags: list = None,
+              price_prev_scan: float = None) -> None:
     flags_str = ", ".join(quality_flags) if quality_flags else ""
     with conn() as c:
         c.execute("""
             INSERT INTO scan_alerts
-                (condition_id, alert_type, price_at_alert, drop_magnitude,
-                 ambient_vol, quality_score, quality_flags)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-        """, (condition_id, alert_type, price, drop, ambient_vol,
-              quality_score, flags_str))
+                (condition_id, alert_type, price_at_alert, price_prev_scan,
+                 drop_magnitude, ambient_vol, quality_score, quality_flags)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """, (condition_id, alert_type, price, price_prev_scan,
+              drop, ambient_vol, quality_score, flags_str))
+
+
+def get_pending_10min_followups(mins_min: float = 8, mins_max: float = 90) -> list[dict]:
+    """
+    Return alerts fired between mins_min and mins_max ago that have not yet
+    had a followup price recorded. The wide window (up to 90 min) ensures
+    we catch alerts even if the followup cron missed a cycle.
+    """
+    with conn() as c:
+        rows = c.execute("""
+            SELECT a.id, a.condition_id, a.alert_type, a.price_at_alert,
+                   a.price_prev_scan, a.fired_at, m.question, m.url, m.category
+            FROM scan_alerts a
+            JOIN markets m ON m.condition_id = a.condition_id
+            WHERE a.fired_at >= datetime('now', ? || ' minutes')
+              AND a.fired_at <= datetime('now', ? || ' minutes')
+              AND a.followup_price IS NULL
+            ORDER BY a.fired_at DESC
+        """, (f'-{mins_max}', f'-{mins_min}')).fetchall()
+    return [dict(r) for r in rows]
+
+
+def mark_10min_followup(alert_id: int, price: float) -> None:
+    """Record the followup price against an alert so it isn't checked again."""
+    with conn() as c:
+        c.execute("""
+            UPDATE scan_alerts
+            SET followup_price = ?, followup_at = datetime('now')
+            WHERE id = ?
+        """, (price, alert_id))
 
 
 def get_recent_alerts(hours_min: float = 1.5, hours_max: float = 3.0) -> list[dict]:

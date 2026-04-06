@@ -135,6 +135,7 @@ def log_alert(
     ambient_vol: float | None,
     quality_score: int = 0,
     quality_flags: list = None,
+    prev_scan_price: float = None,
 ) -> bool:
     """Append one row to Raw Alerts sheet. Never raises."""
     try:
@@ -171,11 +172,12 @@ def log_alert(
             round(ambient_vol, 2) if ambient_vol is not None else "",
             quality_score,
             flags_str,
+            round(prev_scan_price, 2) if prev_scan_price is not None else "",  # O
         ]
 
         url = (
             f"https://sheets.googleapis.com/v4/spreadsheets/{sheet_id}"
-            f"/values/Raw%20Alerts!A:N:append"
+            f"/values/Raw%20Alerts!A:O:append"
             f"?valueInputOption=USER_ENTERED&insertDataOption=INSERT_ROWS"
         )
         r = requests.post(
@@ -199,21 +201,23 @@ def log_drop_alert(market: dict, drop_pts: float,
                    prev_price: float, vol_spike: float,
                    ambient_vol: float | None,
                    quality_score: int = 0,
-                   quality_flags: list = None) -> bool:
+                   quality_flags: list = None,
+                   prev_scan_price: float = None) -> bool:
     price_after  = market.get("yes_price", 0)
     price_before = price_after + drop_pts
     return log_alert(market, "DROP", price_before, price_after,
                      -abs(drop_pts), vol_spike, ambient_vol,
-                     quality_score, quality_flags)
+                     quality_score, quality_flags, prev_scan_price)
 
 
 def log_spike_alert(market: dict, spike_pts: float,
                     prev_price: float, vol_spike: float,
                     ambient_vol: float | None,
                     quality_score: int = 0,
-                    quality_flags: list = None) -> bool:
+                    quality_flags: list = None,
+                    prev_scan_price: float = None) -> bool:
     price_after  = market.get("yes_price", 0)
     price_before = price_after - spike_pts
     return log_alert(market, "SPIKE", price_before, price_after,
                      abs(spike_pts), vol_spike, ambient_vol,
-                     quality_score, quality_flags)
+                     quality_score, quality_flags, prev_scan_price)

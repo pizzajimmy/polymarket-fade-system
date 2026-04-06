@@ -38,14 +38,14 @@ function setupSheets() {
 
   // Raw Alerts — ensure header includes cols M and N
   var rawSheet = ss.getSheetByName("Raw Alerts") || ss.insertSheet("Raw Alerts");
-  if (rawSheet.getLastColumn() < 14 || rawSheet.getRange("A1").getValue() === "") {
-    rawSheet.getRange("A1:N1").setValues([[
+  if (rawSheet.getLastColumn() < 15 || rawSheet.getRange("A1").getValue() === "") {
+    rawSheet.getRange("A1:O1").setValues([[
       "Timestamp", "Market Name", "URL", "Category", "Direction",
       "Price Before", "Price After", "Change (pts)", "Volume 24h",
       "Vol Multiple", "Liquidity", "Ambient Vol",
-      "Quality Score", "Quality Flags"
+      "Quality Score", "Quality Flags", "Pre-Alert Price"
     ]]);
-    rawSheet.getRange("A1:N1").setFontWeight("bold");
+    rawSheet.getRange("A1:O1").setFontWeight("bold");
   }
 
   // Evaluations Log — always rewrite headers so stale layouts get fixed.
@@ -156,22 +156,23 @@ function openEvaluationDialog() {
     return;
   }
 
-  var data = sheet.getRange(row, 1, 1, 14).getValues()[0];
+  var data = sheet.getRange(row, 1, 1, 15).getValues()[0];
   var alertData = {
-    alertTimestamp: data[0] ? data[0].toString() : "",
-    marketName:     data[1] || "",
-    url:            data[2] || "",
-    category:       data[3] || "",
-    direction:      data[4] || "",
-    priceBefore:    data[5] || "",
-    priceAfter:     data[6] || "",
-    changePts:      data[7] || "",
-    volume24h:      data[8] || "",
-    volMultiple:    data[9] || "",
-    liquidity:      data[10] || "",
-    ambientVol:     data[11] || "",
-    qualityScore:   data[12] || 0,
-    qualityFlags:   data[13] || "",
+    alertTimestamp:  data[0] ? data[0].toString() : "",
+    marketName:      data[1] || "",
+    url:             data[2] || "",
+    category:        data[3] || "",
+    direction:       data[4] || "",
+    priceBefore:     data[5] || "",
+    priceAfter:      data[6] || "",
+    changePts:       data[7] || "",
+    volume24h:       data[8] || "",
+    volMultiple:     data[9] || "",
+    liquidity:       data[10] || "",
+    ambientVol:      data[11] || "",
+    qualityScore:    data[12] || 0,
+    qualityFlags:    data[13] || "",
+    preAlertPrice:   data[14] || "",
   };
 
   var html = HtmlService.createTemplateFromFile("EvaluationDialog");
