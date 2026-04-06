@@ -95,7 +95,8 @@ def send_telegram(message: str) -> bool:
 
 def format_drop_alert(market: dict, drop: float, ambient_vol: float | None,
                       vol_spike: float, prev_price: float,
-                      quality_score: int = 0, quality_flags: list = None) -> str:
+                      quality_score: int = 0, quality_flags: list = None,
+                      prev_scan_price: float = None) -> str:
     q = market["question"][:90] + ("…" if len(market["question"]) > 90 else "")
     cat = market.get("category", "unknown")
     vol_str = f"{vol_spike:.1f}× avg volume" if vol_spike > 1 else ""
@@ -105,6 +106,12 @@ def format_drop_alert(market: dict, drop: float, ambient_vol: float | None,
         amb_str = f"\nAmbient vol: {ambient_vol:.1f} pts/day{amb_flag}"
     url = market.get("url", "")
     url_tag = f'\n<a href="{url}">Open on Polymarket</a>' if url else ""
+    prev_scan_str = (
+        f"\nPre-alert:  <b>{prev_scan_price:.1f}¢</b>  "
+        f"(move started {prev_price:.1f}¢→{prev_scan_price:.1f}¢ before threshold)"
+        if prev_scan_price and abs(prev_scan_price - market['yes_price']) > abs(prev_scan_price - prev_price) * 0.1
+        else (f"\nPre-alert:  {prev_scan_price:.1f}¢" if prev_scan_price else "")
+    )
     score_str = f"\n\n<b>Quality score: {quality_score}/100</b>"
     if quality_flags:
         score_str += f"\n{' · '.join(quality_flags)}"
@@ -112,6 +119,7 @@ def format_drop_alert(market: dict, drop: float, ambient_vol: float | None,
         f"📉 <b>Price drop alert — {cat}</b>\n"
         f"<i>{q}</i>\n\n"
         f"Drop:    <b>{prev_price:.1f}¢ → {market['yes_price']:.1f}¢  (−{drop:.1f} pts)</b>\n"
+        f"{prev_scan_str}\n"
         f"Volume:  ${market['volume_24h']:,.0f} 24h  {vol_str}\n"
         f"Liquidity: ${market['liquidity']:,.0f}"
         f"{amb_str}"
@@ -122,7 +130,8 @@ def format_drop_alert(market: dict, drop: float, ambient_vol: float | None,
 
 def format_spike_alert(market: dict, rise: float, ambient_vol: float | None,
                        vol_spike: float, prev_price: float,
-                       quality_score: int = 0, quality_flags: list = None) -> str:
+                       quality_score: int = 0, quality_flags: list = None,
+                       prev_scan_price: float = None) -> str:
     q = market["question"][:90] + ("…" if len(market["question"]) > 90 else "")
     cat = market.get("category", "unknown")
     amb_str = ""
@@ -131,6 +140,7 @@ def format_spike_alert(market: dict, rise: float, ambient_vol: float | None,
         amb_str = f"\nAmbient vol: {ambient_vol:.1f} pts/day{amb_flag}"
     url = market.get("url", "")
     url_tag = f'\n<a href="{url}">Open on Polymarket</a>' if url else ""
+    prev_scan_str = f"\nPre-alert:  {prev_scan_price:.1f}¢" if prev_scan_price else ""
     score_str = f"\n\n<b>Quality score: {quality_score}/100</b>"
     if quality_flags:
         score_str += f"\n{' · '.join(quality_flags)}"
@@ -138,6 +148,7 @@ def format_spike_alert(market: dict, rise: float, ambient_vol: float | None,
         f"📈 <b>Price spike alert — {cat}</b>\n"
         f"<i>{q}</i>\n\n"
         f"Spike:   <b>{prev_price:.1f}¢ → {market['yes_price']:.1f}¢  (+{rise:.1f} pts)</b>\n"
+        f"{prev_scan_str}\n"
         f"Volume:  ${market['volume_24h']:,.0f} 24h  {vol_spike:.1f}× avg volume\n"
         f"Liquidity: ${market['liquidity']:,.0f}\n"
         f"<i>Consider buying NO if spike is sentiment-driven speculation.</i>"
@@ -427,9 +438,10 @@ def analyse_market(market: dict) -> dict:
     price   = market["yes_price"]
     vol_24h = market["volume_24h"]
 
-    prev_price  = db.price_n_hours_ago(cid, hours=24)
-    ambient_vol = db.ambient_volatility(cid, days=30)
-    vol_spike_r = db.volume_spike(cid, vol_24h) if vol_24h else 1.0
+    prev_price      = db.price_n_hours_ago(cid, hours=24)
+    prev_scan_price = db.price_before_current(cid)   # price from previous scan cycle
+    ambient_vol     = db.ambient_volatility(cid, days=30)
+    vol_spike_r     = db.volume_spike(cid, vol_24h) if vol_24h else 1.0
 
     drop = (prev_price - price) if prev_price else 0
     rise = (price - prev_price) if prev_price else 0
@@ -450,14 +462,15 @@ def analyse_market(market: dict) -> dict:
         alert_types.append("DROP")
 
     return {
-        "condition_id": cid,
-        "price":        price,
-        "prev_price":   prev_price,
-        "drop":         round(drop, 2),
-        "rise":         round(rise, 2),
-        "ambient_vol":  ambient_vol,
-        "vol_spike":    vol_spike_r,
-        "alert_types":  alert_types,
+        "condition_id":   cid,
+        "price":          price,
+        "prev_price":     prev_price,
+        "prev_scan_price": prev_scan_price,
+        "drop":           round(drop, 2),
+        "rise":           round(rise, 2),
+        "ambient_vol":    ambient_vol,
+        "vol_spike":      vol_spike_r,
+        "alert_types":    alert_types,
     }
 
 
@@ -524,6 +537,89 @@ def run_followup_check(dry_run: bool = False) -> None:
                 log.info(f"[followup DRY RUN] Strengthening: {alert['question'][:50]}")
 
 
+def run_10min_followup(dry_run: bool = False) -> None:
+    """
+    For every alert fired in the last 8-90 minutes that hasn't had a
+    followup price recorded yet, fetch the current price and send a brief
+    Telegram update showing the immediate price movement.
+
+    Designed to run on a short cron (e.g. */10 * * * *) independently of
+    the main scan. Also called at the start of each run_scan() cycle to
+    catch anything within the poll window.
+    """
+    try:
+        alerts = db.get_pending_10min_followups(mins_min=8, mins_max=90)
+    except Exception as e:
+        log.error(f"[10min followup] DB query failed: {e}")
+        return
+
+    for alert in alerts:
+        cid             = alert["condition_id"]
+        alert_price     = alert["price_at_alert"]
+        prev_scan_price = alert.get("price_prev_scan")
+        alert_type      = alert["alert_type"]
+
+        if alert_price is None:
+            continue
+
+        current_price = db.latest_price(cid)
+        if current_price is None:
+            continue
+
+        delta = current_price - alert_price
+
+        # Build context line showing the full price journey
+        if prev_scan_price:
+            journey = (
+                f"Pre-alert: {prev_scan_price:.1f}¢  →  "
+                f"Alert: {alert_price:.1f}¢  →  "
+                f"Now: {current_price:.1f}¢  (<b>{delta:+.1f} pts</b>)"
+            )
+        else:
+            journey = (
+                f"At alert: {alert_price:.1f}¢  →  "
+                f"Now: {current_price:.1f}¢  (<b>{delta:+.1f} pts</b>)"
+            )
+
+        if alert_type == "DROP":
+            continuing = delta < -3
+            recovering = delta > 3
+        else:
+            continuing = delta > 3
+            recovering = delta < -3
+
+        if continuing:
+            status_line = f"⚠️ <i>Still moving in alert direction — may be structural.</i>"
+        elif recovering:
+            status_line = f"✅ <i>Recovering from the {alert_type.lower()} — overcorrection thesis intact.</i>"
+        else:
+            status_line = f"⏸ <i>Price stabilising after {alert_type.lower()}.</i>"
+
+        url = alert.get("url", "")
+        url_tag = f'\n<a href="{url}">Check market</a>' if url else ""
+
+        msg = (
+            f"⏱ <b>10-min check — {alert.get('category', '')}</b>\n"
+            f"<i>{alert['question'][:80]}</i>\n\n"
+            f"{journey}\n"
+            f"{status_line}"
+            f"{url_tag}"
+        )
+
+        if not dry_run:
+            send_telegram(msg)
+            db.mark_10min_followup(alert["id"], current_price)
+            log.info(
+                f"[10min] Followup sent for {alert['question'][:40]} "
+                f"alert={alert_price:.1f} now={current_price:.1f} delta={delta:+.1f}"
+            )
+        else:
+            log.info(
+                f"[10min DRY RUN] {alert['question'][:50]} "
+                f"alert={alert_price:.1f} now={current_price:.1f} delta={delta:+.1f}"
+            )
+
+
 def run_scan(dry_run: bool = False) -> dict:
     """
     Full scan cycle. Returns summary dict with counts.
@@ -531,6 +627,9 @@ def run_scan(dry_run: bool = False) -> dict:
     """
     log.info("=== Scan cycle starting ===")
     start = time.time()
+
+    # Run 10-min followup first — catches alerts from the previous cycle
+    run_10min_followup(dry_run=dry_run)
 
     markets_seen  = 0
     prices_stored = 0
@@ -583,18 +682,20 @@ def run_scan(dry_run: bool = False) -> dict:
                     analysis["prev_price"],
                     quality_score,
                     quality_flags,
+                    analysis["prev_scan_price"],
                 )
                 drop_markets.append({
-                    "question":      market["question"],
-                    "url":           market.get("url", ""),
-                    "price":         market["yes_price"],
-                    "prev_price":    analysis["prev_price"],
-                    "drop":          analysis["drop"],
-                    "ambient_vol":   analysis["ambient_vol"],
-                    "vol_spike":     analysis["vol_spike"],
-                    "category":      market.get("category", ""),
-                    "quality_score": quality_score,
-                    "quality_flags": quality_flags,
+                    "question":        market["question"],
+                    "url":             market.get("url", ""),
+                    "price":           market["yes_price"],
+                    "prev_price":      analysis["prev_price"],
+                    "prev_scan_price": analysis["prev_scan_price"],
+                    "drop":            analysis["drop"],
+                    "ambient_vol":     analysis["ambient_vol"],
+                    "vol_spike":       analysis["vol_spike"],
+                    "category":        market.get("category", ""),
+                    "quality_score":   quality_score,
+                    "quality_flags":   quality_flags,
                 })
             elif alert_type == "SPIKE":
                 msg = format_spike_alert(
@@ -605,6 +706,7 @@ def run_scan(dry_run: bool = False) -> dict:
                     analysis["prev_price"],
                     quality_score,
                     quality_flags,
+                    analysis["prev_scan_price"],
                 )
 
             if not dry_run:
@@ -612,32 +714,35 @@ def run_scan(dry_run: bool = False) -> dict:
                     # ── Sheets export ──────────────────────────────────────
                     if alert_type == "DROP":
                         log_drop_alert(
-                            market        = market,
-                            drop_pts      = analysis["drop"],
-                            prev_price    = analysis["prev_price"],
-                            vol_spike     = analysis["vol_spike"],
-                            ambient_vol   = analysis["ambient_vol"],
-                            quality_score = quality_score,
-                            quality_flags = quality_flags,
+                            market          = market,
+                            drop_pts        = analysis["drop"],
+                            prev_price      = analysis["prev_price"],
+                            vol_spike       = analysis["vol_spike"],
+                            ambient_vol     = analysis["ambient_vol"],
+                            quality_score   = quality_score,
+                            quality_flags   = quality_flags,
+                            prev_scan_price = analysis["prev_scan_price"],
                         )
                     elif alert_type == "SPIKE":
                         log_spike_alert(
-                            market        = market,
-                            spike_pts     = analysis["rise"],
-                            prev_price    = analysis["prev_price"],
-                            vol_spike     = analysis["vol_spike"],
-                            ambient_vol   = analysis["ambient_vol"],
-                            quality_score = quality_score,
-                            quality_flags = quality_flags,
+                            market          = market,
+                            spike_pts       = analysis["rise"],
+                            prev_price      = analysis["prev_price"],
+                            vol_spike       = analysis["vol_spike"],
+                            ambient_vol     = analysis["ambient_vol"],
+                            quality_score   = quality_score,
+                            quality_flags   = quality_flags,
+                            prev_scan_price = analysis["prev_scan_price"],
                         )
                     # ── DB log ─────────────────────────────────────────────
                     db.log_alert(
                         market["condition_id"], alert_type,
-                        price         = market["yes_price"],
-                        drop          = analysis.get("drop"),
-                        ambient_vol   = analysis.get("ambient_vol"),
-                        quality_score = quality_score,
-                        quality_flags = quality_flags,
+                        price           = market["yes_price"],
+                        drop            = analysis.get("drop"),
+                        ambient_vol     = analysis.get("ambient_vol"),
+                        quality_score   = quality_score,
+                        quality_flags   = quality_flags,
+                        price_prev_scan = analysis.get("prev_scan_price"),
                     )
                     alerts_fired += 1
 
@@ -694,11 +799,18 @@ def main():
     parser.add_argument("--prune",    action="store_true", help="Prune old readings and exit")
     parser.add_argument("--report",   action="store_true",
                         help="Print current drop candidates as JSON and exit")
-    parser.add_argument("--followup", action="store_true",
+    parser.add_argument("--followup",   action="store_true",
                         help="Run 2-hour followup check and exit")
+    parser.add_argument("--followup10", action="store_true",
+                        help="Run 10-minute post-alert check and exit "
+                             "(add to cron: */10 * * * *)")
     args = parser.parse_args()
 
     db.init_db()
+
+    if args.followup10:
+        run_10min_followup(dry_run=args.dry_run)
+        return
 
     if args.followup:
         run_followup_check(dry_run=args.dry_run)
