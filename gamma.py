@@ -175,6 +175,7 @@ def _parse_market(m: dict) -> dict | None:
             "condition_id":  m.get("conditionId", ""),
             "question":      m.get("question", ""),
             "slug":          slug,
+            "event_slug":    event_slug,
             "url":           url,
             "token_id_yes":  token_id_yes,
             "yes_price":     round(yes_price, 2),
@@ -298,3 +299,14 @@ def fetch_market_by_slug(slug: str) -> dict | None:
     if isinstance(raw, list) and raw:
         return _parse_market(raw[0])
     return None
+
+
+def fetch_markets_by_event(event_slug: str) -> list[dict]:
+    """Fetch all markets belonging to a given event (multi-outcome group)."""
+    if not event_slug:
+        return []
+    raw = _get("/markets", {"eventSlug": event_slug, "limit": 50})
+    if not isinstance(raw, list):
+        return []
+    parsed = [_parse_market(m) for m in raw]
+    return [m for m in parsed if m]

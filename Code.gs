@@ -38,14 +38,15 @@ function setupSheets() {
 
   // Raw Alerts — ensure header includes cols M and N
   var rawSheet = ss.getSheetByName("Raw Alerts") || ss.insertSheet("Raw Alerts");
-  if (rawSheet.getLastColumn() < 15 || rawSheet.getRange("A1").getValue() === "") {
-    rawSheet.getRange("A1:O1").setValues([[
+  if (rawSheet.getLastColumn() < 18 || rawSheet.getRange("A1").getValue() === "") {
+    rawSheet.getRange("A1:R1").setValues([[
       "Timestamp", "Market Name", "URL", "Category", "Direction",
       "Price Before", "Price After", "Change (pts)", "Volume 24h",
       "Vol Multiple", "Liquidity", "Ambient Vol",
-      "Quality Score", "Quality Flags", "Pre-Alert Price"
+      "Quality Score", "Quality Flags", "Pre-Alert Price",
+      "Best Bid", "Best Ask", "Spread (pts)"
     ]]);
-    rawSheet.getRange("A1:O1").setFontWeight("bold");
+    rawSheet.getRange("A1:R1").setFontWeight("bold");
   }
 
   // Evaluations Log — always rewrite headers so stale layouts get fixed.
@@ -156,7 +157,7 @@ function openEvaluationDialog() {
     return;
   }
 
-  var data = sheet.getRange(row, 1, 1, 15).getValues()[0];
+  var data = sheet.getRange(row, 1, 1, 18).getValues()[0];
   var alertData = {
     alertTimestamp:  data[0] ? data[0].toString() : "",
     marketName:      data[1] || "",
@@ -173,6 +174,9 @@ function openEvaluationDialog() {
     qualityScore:    data[12] || 0,
     qualityFlags:    data[13] || "",
     preAlertPrice:   data[14] || "",
+    bestBid:         data[15] || "",
+    bestAsk:         data[16] || "",
+    spreadPts:       data[17] || "",
   };
 
   var html = HtmlService.createTemplateFromFile("EvaluationDialog");
@@ -539,15 +543,19 @@ function refreshEvaluations() {
   }
 
   // Col indices (0-based)
-  var COL_URL        = 3;   // D — Market URL
-  var COL_QUESTION   = 2;   // C — Market Name
-  var COL_PRICE_NOW  = 25;  // Z — Current Price
-  var COL_RESOLUTION = 26;  // AA — Resolution
-  var COL_CHECKED    = 27;  // AB — Last Checked
+  var COL_URL            = 3;   // D — Market URL
+  var COL_QUESTION       = 2;   // C — Market Name
+  var COL_DIRECTION      = 5;   // F — Direction
+  var COL_CLASSIFICATION = 10;  // K — Classification
+  var COL_CLASS_CORRECT  = 23;  // X — Classification Correct?
+  var COL_PRICE_NOW      = 25;  // Z — Current Price
+  var COL_RESOLUTION     = 26;  // AA — Resolution
+  var COL_CHECKED        = 27;  // AB — Last Checked
 
   var now        = new Date();
   var updated    = 0;
   var resolved   = 0;
+  var autoScored = 0;
   var urlsFixed  = 0;
   var errors     = 0;
 
@@ -577,7 +585,37 @@ function refreshEvaluations() {
       }
 
       updated++;
-      if (status.resolution === "YES" || status.resolution === "NO") resolved++;
+      if (status.resolution === "YES" || status.resolution === "NO") {
+        resolved++;
+
+        // ── Feature 4: Auto classification accuracy ──────────────
+        var classification = (data[i][COL_CLASSIFICATION] || "").toString().trim();
+        var classCorrect   = (data[i][COL_CLASS_CORRECT] || "").toString().trim();
+        var direction      = (data[i][COL_DIRECTION] || "").toString().trim();
+
+        if (classification && !classCorrect) {
+          // SENTIMENT = overcorrection, expects recovery (mean-revert)
+          // STRUCTURAL = genuine repricing, expects price to stick
+          // For DROP: recovery = resolved YES (price went back up)
+          // For SPIKE: recovery = resolved NO (price came back down)
+          var recovered = (direction === "DROP" && status.resolution === "YES") ||
+                          (direction === "SPIKE" && status.resolution === "NO");
+
+          var autoResult;
+          if (classification === "UNCLEAR") {
+            autoResult = "PARTIAL";
+          } else if (classification === "SENTIMENT") {
+            autoResult = recovered ? "YES" : "NO";
+          } else if (classification === "STRUCTURAL") {
+            autoResult = recovered ? "NO" : "YES";
+          }
+
+          if (autoResult) {
+            sheet.getRange(rowNum, COL_CLASS_CORRECT + 1).setValue(autoResult);
+            autoScored++;
+          }
+        }
+      }
 
       Utilities.sleep(400);
     } catch (e) {
@@ -587,11 +625,76 @@ function refreshEvaluations() {
 
   SpreadsheetApp.getUi().alert(
     "Refresh complete.\n\n" +
-    "• " + updated   + " rows updated\n" +
-    "• " + resolved  + " markets resolved (YES/NO)\n" +
-    (urlsFixed > 0 ? "• " + urlsFixed + " URL(s) corrected\n" : "") +
-    (errors > 0    ? "• " + errors   + " errors (check logs)\n" : "")
+    "• " + updated    + " rows updated\n" +
+    "• " + resolved   + " markets resolved (YES/NO)\n" +
+    (autoScored > 0 ? "• " + autoScored + " classification(s) auto-scored\n" : "") +
+    (urlsFixed > 0  ? "• " + urlsFixed  + " URL(s) corrected\n" : "") +
+    (errors > 0     ? "• " + errors    + " errors (check logs)\n" : "")
   );
+}
+
+
+// ── Comparable alert lookup (Feature 3) ──────────────────────────────────────
+
+function findComparableAlerts(category, classification, changePts, direction) {
+  /**
+   * Search Evaluations Log for past alerts with similar characteristics.
+   * Returns array of objects for display in the evaluation dialog.
+   */
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var sheet = ss.getSheetByName("Evaluations Log");
+  if (!sheet) return [];
+
+  var data = sheet.getDataRange().getValues();
+  if (data.length < 2) return [];
+
+  var COL = {
+    MARKET_NAME: 2, CATEGORY: 4, DIRECTION: 5, ALERT_PRICE: 6,
+    PRICE_AT_EVAL: 7, EDGE: 8, FAIR_VALUE: 9, CLASSIFICATION: 10,
+    VERDICT: 14, PNL: 22, CLASS_CORRECT: 23, CURRENT_PRICE: 25,
+    RESOLUTION: 26,
+  };
+
+  var targetMag = Math.abs(parseFloat(changePts) || 0);
+  var results = [];
+
+  for (var i = 1; i < data.length; i++) {
+    var row = data[i];
+    var rowCat   = (row[COL.CATEGORY] || "").toString().toLowerCase().trim();
+    var rowDir   = (row[COL.DIRECTION] || "").toString().trim();
+    var rowClass = (row[COL.CLASSIFICATION] || "").toString().trim();
+    var rowEdge  = Math.abs(parseFloat(row[COL.EDGE]) || 0);
+
+    // Must match category and direction
+    if (rowCat !== (category || "").toLowerCase().trim()) continue;
+    if (rowDir !== (direction || "").trim()) continue;
+
+    // Move magnitude within 60%-150% of target
+    if (targetMag > 0 && (rowEdge < targetMag * 0.6 || rowEdge > targetMag * 1.5)) continue;
+
+    // Prefer same classification if provided, but include all matches
+    var classMatch = !classification || rowClass === classification;
+
+    results.push({
+      marketName:   (row[COL.MARKET_NAME] || "").toString().substring(0, 60),
+      alertPrice:   row[COL.ALERT_PRICE] || "",
+      classification: rowClass,
+      verdict:      (row[COL.VERDICT] || "").toString(),
+      pnl:          row[COL.PNL] || "",
+      classCorrect: (row[COL.CLASS_CORRECT] || "").toString(),
+      resolution:   (row[COL.RESOLUTION] || "").toString(),
+      currentPrice: row[COL.CURRENT_PRICE] || "",
+      classMatch:   classMatch,
+    });
+  }
+
+  // Sort: classification matches first, then most recent
+  results.sort(function(a, b) {
+    if (a.classMatch !== b.classMatch) return a.classMatch ? -1 : 1;
+    return 0;
+  });
+
+  return results.slice(0, 8);
 }
 
 

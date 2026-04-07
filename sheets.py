@@ -136,6 +136,7 @@ def log_alert(
     quality_score: int = 0,
     quality_flags: list = None,
     prev_scan_price: float = None,
+    book_snapshot: dict = None,
 ) -> bool:
     """Append one row to Raw Alerts sheet. Never raises."""
     try:
@@ -156,6 +157,7 @@ def log_alert(
 
         timestamp = datetime.now(timezone(NZT_OFFSET)).strftime("%Y-%m-%d %H:%M:%S NZT")
         flags_str = ", ".join(quality_flags) if quality_flags else ""
+        ob = book_snapshot or {}
 
         row = [
             timestamp,
@@ -173,11 +175,15 @@ def log_alert(
             quality_score,
             flags_str,
             round(prev_scan_price, 2) if prev_scan_price is not None else "",  # O
+            # Order book snapshot (P, Q, R)
+            round(ob.get("best_bid_cents"), 1) if ob.get("best_bid_cents") is not None else "",
+            round(ob.get("best_ask_cents"), 1) if ob.get("best_ask_cents") is not None else "",
+            round(ob.get("spread_pts"), 2) if ob.get("spread_pts") is not None else "",
         ]
 
         url = (
             f"https://sheets.googleapis.com/v4/spreadsheets/{sheet_id}"
-            f"/values/Raw%20Alerts!A:O:append"
+            f"/values/Raw%20Alerts!A:R:append"
             f"?valueInputOption=USER_ENTERED&insertDataOption=INSERT_ROWS"
         )
         r = requests.post(
@@ -202,12 +208,14 @@ def log_drop_alert(market: dict, drop_pts: float,
                    ambient_vol: float | None,
                    quality_score: int = 0,
                    quality_flags: list = None,
-                   prev_scan_price: float = None) -> bool:
+                   prev_scan_price: float = None,
+                   book_snapshot: dict = None) -> bool:
     price_after  = market.get("yes_price", 0)
     price_before = price_after + drop_pts
     return log_alert(market, "DROP", price_before, price_after,
                      -abs(drop_pts), vol_spike, ambient_vol,
-                     quality_score, quality_flags, prev_scan_price)
+                     quality_score, quality_flags, prev_scan_price,
+                     book_snapshot)
 
 
 def log_spike_alert(market: dict, spike_pts: float,
@@ -215,9 +223,11 @@ def log_spike_alert(market: dict, spike_pts: float,
                     ambient_vol: float | None,
                     quality_score: int = 0,
                     quality_flags: list = None,
-                    prev_scan_price: float = None) -> bool:
+                    prev_scan_price: float = None,
+                    book_snapshot: dict = None) -> bool:
     price_after  = market.get("yes_price", 0)
     price_before = price_after - spike_pts
     return log_alert(market, "SPIKE", price_before, price_after,
                      abs(spike_pts), vol_spike, ambient_vol,
-                     quality_score, quality_flags, prev_scan_price)
+                     quality_score, quality_flags, prev_scan_price,
+                     book_snapshot)

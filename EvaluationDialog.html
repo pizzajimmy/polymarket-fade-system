@@ -324,6 +324,55 @@
       .logEvaluation(data);
   }
 
+  // ── Comparable alerts ──────────────────────────────────────────────────────
+
+  function loadComparables() {
+    var btn = document.getElementById("compBtn");
+    btn.textContent = "Searching…";
+    btn.disabled = true;
+
+    var cls = document.getElementById("classification").value || "";
+    google.script.run
+      .withSuccessHandler(function(results) {
+        btn.textContent = "Find Comparables";
+        btn.disabled = false;
+        var panel = document.getElementById("compPanel");
+        var tbody = document.getElementById("compBody");
+        tbody.innerHTML = "";
+
+        if (!results || results.length === 0) {
+          tbody.innerHTML = '<tr><td colspan="5" style="color:#888;text-align:center">No comparable alerts found</td></tr>';
+          panel.style.display = "block";
+          return;
+        }
+
+        results.forEach(function(r) {
+          var tr = document.createElement("tr");
+          var verdictColor = r.verdict === "GO" ? "#34a853" : r.verdict === "WEAK_GO" ? "#f9a825" : "#888";
+          var correctColor = r.classCorrect === "YES" ? "#34a853" : r.classCorrect === "NO" ? "#ea4335" : "#888";
+          tr.innerHTML =
+            '<td style="max-width:140px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="' + r.marketName + '">' + r.marketName + '</td>' +
+            '<td>' + (r.classification || "—") + '</td>' +
+            '<td style="color:' + verdictColor + ';font-weight:bold">' + (r.verdict || "—") + '</td>' +
+            '<td>' + (r.pnl !== "" ? r.pnl + "pts" : "—") + '</td>' +
+            '<td style="color:' + correctColor + '">' + (r.classCorrect || "—") + '</td>';
+          tbody.appendChild(tr);
+        });
+        panel.style.display = "block";
+      })
+      .withFailureHandler(function(err) {
+        btn.textContent = "Find Comparables";
+        btn.disabled = false;
+        alert("Error: " + err.message);
+      })
+      .findComparableAlerts(
+        alertData.category,
+        cls,
+        alertData.changePts,
+        alertData.direction
+      );
+  }
+
   window.onload = init;
 </script>
 
@@ -430,6 +479,27 @@
     <div class="status-line" style="margin-top:6px;font-style:italic;color:#7c5cbf">
       Fields pre-filled above — review and edit before saving.
     </div>
+  </div>
+</div>
+
+<!-- ── Comparable alerts ─────────────────────────────────────────────────────── -->
+<div class="section">
+  <div class="section-title">Comparable Past Alerts</div>
+  <button class="btn-sm btn-secondary" id="compBtn" type="button"
+          onclick="loadComparables()">Find Comparables</button>
+  <div id="compPanel" style="display:none;margin-top:6px">
+    <table style="width:100%;font-size:11px;border-collapse:collapse">
+      <thead>
+        <tr style="border-bottom:1px solid #ccc;text-align:left">
+          <th style="padding:2px 4px">Market</th>
+          <th style="padding:2px 4px">Class</th>
+          <th style="padding:2px 4px">Verdict</th>
+          <th style="padding:2px 4px">P&L</th>
+          <th style="padding:2px 4px">Correct?</th>
+        </tr>
+      </thead>
+      <tbody id="compBody"></tbody>
+    </table>
   </div>
 </div>
 
