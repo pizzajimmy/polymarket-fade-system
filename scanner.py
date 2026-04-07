@@ -23,7 +23,8 @@ from datetime import datetime
 from sheets import log_drop_alert, log_spike_alert
 
 import db
-from gamma import fetch_all_active_markets
+from gamma import fetch_all_active_markets, fetch_markets_by_event
+from slippage import fetch_book, book_summary
 
 # ── Config ────────────────────────────────────────────────────────────────────
 
@@ -96,7 +97,8 @@ def send_telegram(message: str) -> bool:
 def format_drop_alert(market: dict, drop: float, ambient_vol: float | None,
                       vol_spike: float, prev_price: float,
                       quality_score: int = 0, quality_flags: list = None,
-                      prev_scan_price: float = None) -> str:
+                      prev_scan_price: float = None,
+                      book_snapshot: dict = None) -> str:
     q = market["question"][:90] + ("…" if len(market["question"]) > 90 else "")
     cat = market.get("category", "unknown")
     vol_str = f"{vol_spike:.1f}× avg volume" if vol_spike > 1 else ""
@@ -115,6 +117,7 @@ def format_drop_alert(market: dict, drop: float, ambient_vol: float | None,
     score_str = f"\n\n<b>Quality score: {quality_score}/100</b>"
     if quality_flags:
         score_str += f"\n{' · '.join(quality_flags)}"
+    book_str = format_book_line(book_snapshot)
     return (
         f"📉 <b>Price drop alert — {cat}</b>\n"
         f"<i>{q}</i>\n\n"
@@ -122,6 +125,7 @@ def format_drop_alert(market: dict, drop: float, ambient_vol: float | None,
         f"{prev_scan_str}\n"
         f"Volume:  ${market['volume_24h']:,.0f} 24h  {vol_str}\n"
         f"Liquidity: ${market['liquidity']:,.0f}"
+        f"{book_str}"
         f"{amb_str}"
         f"{score_str}"
         f"{url_tag}"
@@ -131,7 +135,8 @@ def format_drop_alert(market: dict, drop: float, ambient_vol: float | None,
 def format_spike_alert(market: dict, rise: float, ambient_vol: float | None,
                        vol_spike: float, prev_price: float,
                        quality_score: int = 0, quality_flags: list = None,
-                       prev_scan_price: float = None) -> str:
+                       prev_scan_price: float = None,
+                       book_snapshot: dict = None) -> str:
     q = market["question"][:90] + ("…" if len(market["question"]) > 90 else "")
     cat = market.get("category", "unknown")
     amb_str = ""
@@ -144,13 +149,15 @@ def format_spike_alert(market: dict, rise: float, ambient_vol: float | None,
     score_str = f"\n\n<b>Quality score: {quality_score}/100</b>"
     if quality_flags:
         score_str += f"\n{' · '.join(quality_flags)}"
+    book_str = format_book_line(book_snapshot)
     return (
         f"📈 <b>Price spike alert — {cat}</b>\n"
         f"<i>{q}</i>\n\n"
         f"Spike:   <b>{prev_price:.1f}¢ → {market['yes_price']:.1f}¢  (+{rise:.1f} pts)</b>\n"
         f"{prev_scan_str}\n"
         f"Volume:  ${market['volume_24h']:,.0f} 24h  {vol_spike:.1f}× avg volume\n"
-        f"Liquidity: ${market['liquidity']:,.0f}\n"
+        f"Liquidity: ${market['liquidity']:,.0f}"
+        f"{book_str}\n"
         f"<i>Consider buying NO if spike is sentiment-driven speculation.</i>"
         f"{amb_str}"
         f"{score_str}"
@@ -171,6 +178,92 @@ def format_ambient_alert(market: dict, ambient_vol: float) -> str:
         f"<i>Pre-qualify as a fade candidate when news hits this market.</i>"
         f"{url_tag}"
     )
+
+
+# ── Order book snapshot ──────────────────────────────────────────────────────
+
+def _snapshot_order_book(token_id_yes: str) -> dict | None:
+    """Fetch book summary; returns None on any failure (never blocks alerts)."""
+    if not token_id_yes:
+        return None
+    try:
+        book = fetch_book(token_id_yes)
+        return book_summary(book)
+    except Exception as e:
+        log.debug(f"[book] Failed to fetch order book: {e}")
+        return None
+
+
+def format_book_line(ob: dict | None) -> str:
+    """One-line order book summary for Telegram alerts."""
+    if not ob or ob.get("best_bid_cents") is None:
+        return ""
+    imb = ob.get("bid_ask_imbalance")
+    imb_label = ""
+    if imb is not None:
+        if imb > 0.6:
+            imb_label = " (bid-heavy)"
+        elif imb < 0.4:
+            imb_label = " (ask-heavy)"
+    return (
+        f"\nBook:    bid {ob['best_bid_cents']:.1f}¢ / ask {ob['best_ask_cents']:.1f}¢  "
+        f"spread {ob['spread_pts']:.1f}pts  "
+        f"depth ${ob['bid_depth_5lvl']:,.0f}/${ob['ask_depth_5lvl']:,.0f}"
+        f"{imb_label}"
+    )
+
+
+# ── Related markets in same event ────────────────────────────────────────────
+
+def fetch_related_markets(market: dict) -> list[dict]:
+    """
+    Fetch sibling markets from the same Polymarket event.
+    Returns up to 5 related markets with their price and 24h delta.
+    """
+    event_slug = market.get("event_slug", "")
+    if not event_slug:
+        return []
+
+    siblings = fetch_markets_by_event(event_slug)
+    trigger_cid = market["condition_id"]
+    related = []
+
+    for sib in siblings:
+        if sib["condition_id"] == trigger_cid:
+            continue
+        delta = 0
+        prev = db.price_n_hours_ago(sib["condition_id"], hours=24)
+        if prev is not None:
+            delta = sib["yes_price"] - prev
+        related.append({
+            "question":  sib["question"],
+            "url":       sib.get("url", ""),
+            "price":     sib["yes_price"],
+            "delta":     round(delta, 1),
+            "liquidity": sib["liquidity"],
+        })
+
+    related.sort(key=lambda x: x["liquidity"], reverse=True)
+    return related[:5]
+
+
+def format_related_section(related: list[dict], trigger_question: str) -> str:
+    """Format a Telegram message listing related markets in the same event."""
+    if not related:
+        return ""
+    lines = [
+        f"🔗 <b>Related markets (same event)</b>\n"
+        f"<i>{trigger_question[:70]}</i>\n"
+    ]
+    for m in related:
+        delta_str = f"{m['delta']:+.1f}¢" if m['delta'] != 0 else "flat"
+        url_tag = f'<a href="{m["url"]}">→</a> ' if m["url"] else ""
+        lines.append(
+            f"  {url_tag}<b>{m['price']:.1f}¢</b>  ({delta_str} 24h)  "
+            f"liq ${m['liquidity']:,.0f}\n"
+            f"  <i>{m['question'][:75]}</i>"
+        )
+    return "\n".join(lines)
 
 
 # ── Correlated market lag detector ────────────────────────────────────────────
@@ -620,6 +713,36 @@ def run_10min_followup(dry_run: bool = False) -> None:
             )
 
 
+def run_checkpoints(dry_run: bool = False) -> int:
+    """
+    Record price checkpoints for past alerts at predefined intervals
+    (1h, 6h, 24h, 3d, 7d, 14d, 30d). Returns number of checkpoints recorded.
+    """
+    try:
+        pending = db.get_pending_checkpoints()
+    except Exception as e:
+        log.error(f"[checkpoints] DB query failed: {e}")
+        return 0
+
+    recorded = 0
+    for cp in pending:
+        price = db.latest_price(cp["condition_id"])
+        if price is None:
+            continue
+        if not dry_run:
+            db.record_checkpoint(cp["alert_id"], cp["hours_after"], price)
+        label = f"{cp['hours_after']}h" if cp["hours_after"] < 24 else f"{cp['hours_after']/24:.0f}d"
+        log.info(
+            f"[checkpoint] {label} — {cp['question'][:40]} = {price:.1f}¢"
+            f"{' (DRY RUN)' if dry_run else ''}"
+        )
+        recorded += 1
+
+    if recorded:
+        log.info(f"[checkpoints] {recorded} checkpoints recorded")
+    return recorded
+
+
 def run_scan(dry_run: bool = False) -> dict:
     """
     Full scan cycle. Returns summary dict with counts.
@@ -630,6 +753,8 @@ def run_scan(dry_run: bool = False) -> dict:
 
     # Run 10-min followup first — catches alerts from the previous cycle
     run_10min_followup(dry_run=dry_run)
+    # Record any due price checkpoints
+    run_checkpoints(dry_run=dry_run)
 
     markets_seen  = 0
     prices_stored = 0
@@ -647,6 +772,7 @@ def run_scan(dry_run: bool = False) -> dict:
             token_id_yes = market.get("token_id_yes", ""),
             category     = market.get("category", "politics"),
             end_date     = market.get("end_date", ""),
+            event_slug   = market.get("event_slug", ""),
         )
 
         db.record_price(
@@ -673,6 +799,9 @@ def run_scan(dry_run: bool = False) -> dict:
             log.info(f"[quality] {alert_type} score={quality_score} flags={quality_flags} "
                      f"for {market['question'][:40]}")
 
+            # ── Order book snapshot (Feature 5) ───────────────────
+            ob = _snapshot_order_book(market.get("token_id_yes", ""))
+
             if alert_type == "DROP":
                 msg = format_drop_alert(
                     market,
@@ -683,6 +812,7 @@ def run_scan(dry_run: bool = False) -> dict:
                     quality_score,
                     quality_flags,
                     analysis["prev_scan_price"],
+                    ob,
                 )
                 drop_markets.append({
                     "question":        market["question"],
@@ -707,6 +837,7 @@ def run_scan(dry_run: bool = False) -> dict:
                     quality_score,
                     quality_flags,
                     analysis["prev_scan_price"],
+                    ob,
                 )
 
             if not dry_run:
@@ -722,6 +853,7 @@ def run_scan(dry_run: bool = False) -> dict:
                             quality_score   = quality_score,
                             quality_flags   = quality_flags,
                             prev_scan_price = analysis["prev_scan_price"],
+                            book_snapshot   = ob,
                         )
                     elif alert_type == "SPIKE":
                         log_spike_alert(
@@ -733,8 +865,9 @@ def run_scan(dry_run: bool = False) -> dict:
                             quality_score   = quality_score,
                             quality_flags   = quality_flags,
                             prev_scan_price = analysis["prev_scan_price"],
+                            book_snapshot   = ob,
                         )
-                    # ── DB log ─────────────────────────────────────────────
+                    # ── DB log (includes order book snapshot) ─────────────
                     db.log_alert(
                         market["condition_id"], alert_type,
                         price           = market["yes_price"],
@@ -743,8 +876,21 @@ def run_scan(dry_run: bool = False) -> dict:
                         quality_score   = quality_score,
                         quality_flags   = quality_flags,
                         price_prev_scan = analysis.get("prev_scan_price"),
+                        book_snapshot   = ob,
                     )
                     alerts_fired += 1
+
+                    # ── Related markets in same event (Feature 2) ─────────
+                    related = fetch_related_markets(market)
+                    if related:
+                        rel_msg = format_related_section(
+                            related, market["question"]
+                        )
+                        send_telegram(rel_msg)
+                        log.info(
+                            f"[related] {len(related)} sibling markets "
+                            f"for {market['question'][:40]}"
+                        )
 
                     # ── Correlated lag check ───────────────────────────────
                     lagging = find_lagging_correlated(market, alert_type)
@@ -761,7 +907,15 @@ def run_scan(dry_run: bool = False) -> dict:
             else:
                 log.info(f"[DRY RUN] Would alert {alert_type}: {market['question'][:60]}")
                 log.info(f"[DRY RUN]   Quality score: {quality_score}/100  flags: {quality_flags}")
-                # Still run correlation in dry-run so you can see what it finds
+                if ob:
+                    log.info(f"[DRY RUN]   Book: bid {ob.get('best_bid_cents')}¢ "
+                             f"ask {ob.get('best_ask_cents')}¢ "
+                             f"spread {ob.get('spread_pts')}pts")
+                related = fetch_related_markets(market)
+                if related:
+                    log.info(f"[DRY RUN] Related markets ({len(related)}):")
+                    for rm in related:
+                        log.info(f"  {rm['price']:.1f}¢  ({rm['delta']:+.1f}) {rm['question'][:60]}")
                 lagging = find_lagging_correlated(market, alert_type)
                 if lagging:
                     log.info(f"[DRY RUN] Correlated lag candidates ({len(lagging)}):")
@@ -804,9 +958,16 @@ def main():
     parser.add_argument("--followup10", action="store_true",
                         help="Run 10-minute post-alert check and exit "
                              "(add to cron: */10 * * * *)")
+    parser.add_argument("--checkpoints", action="store_true",
+                        help="Record due price checkpoints and exit")
     args = parser.parse_args()
 
     db.init_db()
+
+    if args.checkpoints:
+        n = run_checkpoints(dry_run=args.dry_run)
+        print(f"{n} checkpoints recorded.")
+        return
 
     if args.followup10:
         run_10min_followup(dry_run=args.dry_run)

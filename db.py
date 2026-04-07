@@ -80,7 +80,20 @@ CREATE TABLE IF NOT EXISTS scan_alerts (
 
 CREATE INDEX IF NOT EXISTS idx_alerts_condition
     ON scan_alerts (condition_id, alert_type, fired_at DESC);
+
+CREATE TABLE IF NOT EXISTS alert_checkpoints (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    alert_id     INTEGER NOT NULL REFERENCES scan_alerts(id),
+    hours_after  REAL NOT NULL,          -- nominal interval (1, 6, 24, 72, …)
+    price        REAL NOT NULL,
+    recorded_at  TEXT DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_cp_alert
+    ON alert_checkpoints (alert_id, hours_after);
 """
+
+CHECKPOINT_HOURS = [1, 6, 24, 72, 168, 336, 720]  # 1h, 6h, 24h, 3d, 7d, 14d, 30d
 
 
 def init_db():
@@ -93,6 +106,15 @@ def init_db():
             "ALTER TABLE scan_alerts ADD COLUMN price_prev_scan REAL",
             "ALTER TABLE scan_alerts ADD COLUMN followup_price REAL",
             "ALTER TABLE scan_alerts ADD COLUMN followup_at TEXT",
+            # Feature 2: event_slug on markets
+            "ALTER TABLE markets ADD COLUMN event_slug TEXT DEFAULT ''",
+            # Feature 5: order book snapshot at alert time
+            "ALTER TABLE scan_alerts ADD COLUMN best_bid REAL",
+            "ALTER TABLE scan_alerts ADD COLUMN best_ask REAL",
+            "ALTER TABLE scan_alerts ADD COLUMN spread_pts REAL",
+            "ALTER TABLE scan_alerts ADD COLUMN bid_depth_5 REAL",
+            "ALTER TABLE scan_alerts ADD COLUMN ask_depth_5 REAL",
+            "ALTER TABLE scan_alerts ADD COLUMN bid_ask_imbalance REAL",
         ]
         for sql in migrations:
             try:
@@ -106,12 +128,14 @@ def init_db():
 
 def upsert_market(condition_id: str, question: str, slug: str = "",
                   url: str = "", token_id_yes: str = "",
-                  category: str = "", end_date: str = "") -> None:
+                  category: str = "", end_date: str = "",
+                  event_slug: str = "") -> None:
     with conn() as c:
         c.execute("""
             INSERT INTO markets (condition_id, question, slug, url,
-                                 token_id_yes, category, end_date, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'))
+                                 token_id_yes, category, end_date,
+                                 event_slug, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
             ON CONFLICT(condition_id) DO UPDATE SET
                 question     = excluded.question,
                 slug         = excluded.slug,
@@ -119,8 +143,10 @@ def upsert_market(condition_id: str, question: str, slug: str = "",
                 token_id_yes = excluded.token_id_yes,
                 category     = excluded.category,
                 end_date     = excluded.end_date,
+                event_slug   = excluded.event_slug,
                 updated_at   = datetime('now')
-        """, (condition_id, question, slug, url, token_id_yes, category, end_date))
+        """, (condition_id, question, slug, url, token_id_yes,
+              category, end_date, event_slug))
 
 
 def get_market(condition_id: str) -> sqlite3.Row | None:
@@ -328,16 +354,23 @@ def log_alert(condition_id: str, alert_type: str,
               price: float = None, drop: float = None,
               ambient_vol: float = None,
               quality_score: int = 0, quality_flags: list = None,
-              price_prev_scan: float = None) -> None:
+              price_prev_scan: float = None,
+              book_snapshot: dict = None) -> None:
     flags_str = ", ".join(quality_flags) if quality_flags else ""
+    ob = book_snapshot or {}
     with conn() as c:
         c.execute("""
             INSERT INTO scan_alerts
                 (condition_id, alert_type, price_at_alert, price_prev_scan,
-                 drop_magnitude, ambient_vol, quality_score, quality_flags)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                 drop_magnitude, ambient_vol, quality_score, quality_flags,
+                 best_bid, best_ask, spread_pts, bid_depth_5,
+                 ask_depth_5, bid_ask_imbalance)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (condition_id, alert_type, price, price_prev_scan,
-              drop, ambient_vol, quality_score, flags_str))
+              drop, ambient_vol, quality_score, flags_str,
+              ob.get("best_bid_cents"), ob.get("best_ask_cents"),
+              ob.get("spread_pts"), ob.get("bid_depth_5lvl"),
+              ob.get("ask_depth_5lvl"), ob.get("bid_ask_imbalance")))
 
 
 def get_pending_10min_followups(mins_min: float = 8, mins_max: float = 90) -> list[dict]:
@@ -383,6 +416,103 @@ def get_recent_alerts(hours_min: float = 1.5, hours_max: float = 3.0) -> list[di
             ORDER BY a.fired_at DESC
         """, (f'-{hours_max}', f'-{hours_min}')).fetchall()
     return [dict(r) for r in rows]
+
+
+# ── Price checkpoints ────────────────────────────────────────────────────────
+
+def get_pending_checkpoints() -> list[dict]:
+    """
+    Find alert×interval pairs that are due but not yet recorded.
+    Returns dicts with alert_id, condition_id, hours_after, fired_at, question, url.
+    """
+    results = []
+    with conn() as c:
+        # Only look at alerts from the last 31 days (beyond that, all checkpoints are done)
+        cutoff = (datetime.utcnow() - timedelta(days=31)).isoformat()
+        alerts = c.execute("""
+            SELECT a.id, a.condition_id, a.fired_at, m.question, m.url
+            FROM scan_alerts a
+            JOIN markets m ON m.condition_id = a.condition_id
+            WHERE a.fired_at >= ?
+            ORDER BY a.fired_at DESC
+        """, (cutoff,)).fetchall()
+
+        for alert in alerts:
+            fired = datetime.fromisoformat(alert["fired_at"])
+            elapsed_hours = (datetime.utcnow() - fired).total_seconds() / 3600
+
+            # Find which checkpoints have already been recorded
+            existing = c.execute("""
+                SELECT hours_after FROM alert_checkpoints
+                WHERE alert_id = ?
+            """, (alert["id"],)).fetchall()
+            recorded = {row["hours_after"] for row in existing}
+
+            for interval in CHECKPOINT_HOURS:
+                if interval in recorded:
+                    continue
+                if elapsed_hours >= interval:
+                    results.append({
+                        "alert_id":     alert["id"],
+                        "condition_id": alert["condition_id"],
+                        "hours_after":  interval,
+                        "fired_at":     alert["fired_at"],
+                        "question":     alert["question"],
+                        "url":          alert["url"],
+                    })
+    return results
+
+
+def record_checkpoint(alert_id: int, hours_after: float, price: float) -> None:
+    with conn() as c:
+        c.execute("""
+            INSERT INTO alert_checkpoints (alert_id, hours_after, price)
+            VALUES (?, ?, ?)
+        """, (alert_id, hours_after, price))
+
+
+def get_checkpoints_for_alert(alert_id: int) -> list[dict]:
+    with conn() as c:
+        rows = c.execute("""
+            SELECT hours_after, price, recorded_at
+            FROM alert_checkpoints
+            WHERE alert_id = ?
+            ORDER BY hours_after ASC
+        """, (alert_id,)).fetchall()
+    return [dict(r) for r in rows]
+
+
+# ── Comparable alert lookup ──────────────────────────────────────────────────
+
+def find_comparable_alerts(category: str, alert_type: str,
+                           drop_magnitude: float, limit: int = 5) -> list[dict]:
+    """
+    Find past alerts with similar characteristics.
+    Returns dicts with question, alert price, drop, quality score,
+    fired_at, and checkpoint recovery curve.
+    """
+    mag_lo = abs(drop_magnitude) * 0.6
+    mag_hi = abs(drop_magnitude) * 1.5
+    with conn() as c:
+        rows = c.execute("""
+            SELECT a.id, a.condition_id, a.alert_type, a.price_at_alert,
+                   a.drop_magnitude, a.quality_score, a.fired_at,
+                   a.followup_price, m.question, m.url, m.category
+            FROM scan_alerts a
+            JOIN markets m ON m.condition_id = a.condition_id
+            WHERE m.category = ?
+              AND a.alert_type = ?
+              AND ABS(a.drop_magnitude) BETWEEN ? AND ?
+            ORDER BY a.fired_at DESC
+            LIMIT ?
+        """, (category, alert_type, mag_lo, mag_hi, limit)).fetchall()
+
+    results = []
+    for row in rows:
+        d = dict(row)
+        d["checkpoints"] = get_checkpoints_for_alert(row["id"])
+        results.append(d)
+    return results
 
 
 # ── Stats / diagnostics ───────────────────────────────────────────────────────
