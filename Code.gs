@@ -288,19 +288,23 @@ function fetchMarketPrice(slugOrEventSlug, marketQuestion) {
   }
 
   function fetchByEventSlug(eventSlug, question) {
-    var url = "https://gamma-api.polymarket.com/markets?eventSlug=" + encodeURIComponent(eventSlug) + "&limit=50";
+    // Use /events endpoint since /markets?eventSlug= is unreliable (2026-04)
+    var url = "https://gamma-api.polymarket.com/events?slug=" + encodeURIComponent(eventSlug) + "&limit=1";
     var resp = UrlFetchApp.fetch(url, { muteHttpExceptions: true });
     if (resp.getResponseCode() !== 200) return null;
     var data = JSON.parse(resp.getContentText());
     if (!data || data.length === 0) return null;
+    var event = data[0] || data;
+    var markets = event.markets || [];
+    if (!markets.length) return null;
     if (question) {
       var qLower = question.toLowerCase();
-      for (var i = 0; i < data.length; i++) {
-        if ((data[i].question || "").toLowerCase() === qLower) return data[i];
+      for (var i = 0; i < markets.length; i++) {
+        if ((markets[i].question || "").toLowerCase() === qLower) return markets[i];
       }
     }
-    data.sort(function(a, b) { return (b.liquidity || 0) - (a.liquidity || 0); });
-    return data[0];
+    markets.sort(function(a, b) { return (b.liquidity || 0) - (a.liquidity || 0); });
+    return markets[0];
   }
 
   try {
@@ -474,16 +478,19 @@ function checkMarketStatus(slugOrEventSlug, question) {
   }
 
   function correctUrlFromMarket(m) {
+    // As of 2026-04, eventSlug/groupSlug are null on the /markets endpoint.
+    // The correct event slug lives in events[0].slug.
     var eSlug = m.eventSlug || m.groupSlug || "";
-    var slug  = m.slug || "";
-    var best  = eSlug || slug;
+    if (!eSlug && m.events && m.events.length > 0) {
+      eSlug = m.events[0].slug || "";
+    }
+    var slug = m.slug || "";
+    var best = eSlug || slug;
     return best ? "https://polymarket.com/event/" + best : "";
   }
 
-  function fetchRaw(slug, asEventSlug) {
-    var param = asEventSlug ? "eventSlug" : "slug";
-    // No closed= filter — we need both active and resolved markets
-    var url = "https://gamma-api.polymarket.com/markets?" + param + "=" +
+  function fetchBySlug(slug) {
+    var url = "https://gamma-api.polymarket.com/markets?slug=" +
               encodeURIComponent(slug) + "&limit=50";
     try {
       var resp = UrlFetchApp.fetch(url, { muteHttpExceptions: true });
@@ -501,9 +508,32 @@ function checkMarketStatus(slugOrEventSlug, question) {
     } catch (e) { return null; }
   }
 
+  function fetchByEventSlug(eventSlug) {
+    // Use /events endpoint since /markets?eventSlug= is unreliable
+    var url = "https://gamma-api.polymarket.com/events?slug=" +
+              encodeURIComponent(eventSlug) + "&limit=1";
+    try {
+      var resp = UrlFetchApp.fetch(url, { muteHttpExceptions: true });
+      if (resp.getResponseCode() !== 200) return null;
+      var data = JSON.parse(resp.getContentText());
+      if (!data || data.length === 0) return null;
+      var event = data[0] || data;
+      var markets = event.markets || [];
+      if (!markets.length) return null;
+      if (question) {
+        var q = question.toLowerCase();
+        for (var i = 0; i < markets.length; i++) {
+          if ((markets[i].question || "").toLowerCase() === q) return markets[i];
+        }
+      }
+      markets.sort(function(a, b) { return (b.liquidity || 0) - (a.liquidity || 0); });
+      return markets[0];
+    } catch (e) { return null; }
+  }
+
   try {
-    var market = fetchRaw(slugOrEventSlug, false) ||
-                 fetchRaw(slugOrEventSlug, true);
+    var market = fetchBySlug(slugOrEventSlug) ||
+                 fetchByEventSlug(slugOrEventSlug);
 
     if (!market) return { price: null, resolution: "UNKNOWN", closed: false, correctUrl: "" };
 

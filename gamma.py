@@ -162,9 +162,17 @@ def _parse_market(m: dict) -> dict | None:
         token_id_yes = token_ids[0] if token_ids else ""
 
         slug = m.get("slug", "")
-        # Multi-outcome markets belong to a parent event; use eventSlug for the
-        # URL so the link opens the full event page rather than a dead route.
-        event_slug = m.get("eventSlug") or m.get("groupSlug") or ""
+        # Multi-outcome markets belong to a parent event; use the event slug
+        # for the URL so the link opens the full event page rather than 404.
+        # The API stores this in eventSlug, groupSlug, OR events[0].slug —
+        # check all three (events[0].slug is the most reliable as of 2026-04).
+        events = m.get("events") or []
+        event_slug = (
+            m.get("eventSlug")
+            or m.get("groupSlug")
+            or (events[0].get("slug", "") if events else "")
+            or ""
+        )
         url_slug = event_slug if event_slug else slug
         url  = f"https://polymarket.com/event/{url_slug}" if url_slug else ""
 
@@ -302,11 +310,17 @@ def fetch_market_by_slug(slug: str) -> dict | None:
 
 
 def fetch_markets_by_event(event_slug: str) -> list[dict]:
-    """Fetch all markets belonging to a given event (multi-outcome group)."""
+    """
+    Fetch all markets belonging to a given event (multi-outcome group).
+    Uses the /events endpoint which nests markets inside the event object,
+    since /markets?eventSlug= is unreliable as of 2026-04.
+    """
     if not event_slug:
         return []
-    raw = _get("/markets", {"eventSlug": event_slug, "limit": 50})
-    if not isinstance(raw, list):
+    raw = _get("/events", {"slug": event_slug, "limit": 1})
+    if not raw:
         return []
-    parsed = [_parse_market(m) for m in raw]
+    event = raw[0] if isinstance(raw, list) else raw
+    markets = event.get("markets", [])
+    parsed = [_parse_market(m) for m in markets]
     return [m for m in parsed if m]
