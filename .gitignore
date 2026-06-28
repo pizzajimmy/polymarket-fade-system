@@ -1,5 +1,5 @@
 # ── Database ────────────────────────────────────
-# The SQLite DB is runtime data, not source code.
+# The SQLite DB is runtime.txt data, not source code.
 # It lives on the server, not in the repo.
 prices.db
 *.db
@@ -9,6 +9,7 @@ prices.db
 # ── Secrets ──────────────────────────────────────
 .env
 .env.*
+!.env.example
 secrets.py
 
 # ── Positions data ───────────────────────────────
@@ -37,3 +38,4 @@ logs/
 # ── OS ───────────────────────────────────────────
 .DS_Store
 Thumbs.db
+.idea/

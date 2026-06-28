@@ -1,2 +1,6 @@
+# Collector runs on stdlib + requests only — deliberately minimal so it can run
+# unattended for months without dependency churn.
 requests>=2.31.0
-cryptography>=3.0.0
+
+# Optional, analysis-only (calibrate works on stdlib sqlite3 without it):
+#   duckdb>=1.0.0     # faster ad-hoc feature slicing over the store
