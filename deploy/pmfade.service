@@ -1,0 +1,28 @@
+# systemd unit for the pmfade collector.
+# Install:
+#   sudo cp deploy/pmfade.service /etc/systemd/system/
+#   sudo systemctl daemon-reload && sudo systemctl enable --now pmfade
+#   journalctl -u pmfade -f
+#
+# Restart=always + the healthcheck heartbeat are the two things that fix
+# "it went offline for ages without me noticing".
+
+[Unit]
+Description=Polymarket fade strategy-portfolio collector
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=pmfade
+WorkingDirectory=/opt/pmfade
+EnvironmentFile=/opt/pmfade/.env
+ExecStart=/opt/pmfade/venv/bin/python run_portfolio.py loop
+Restart=always
+RestartSec=30
+# Harden a little
+NoNewPrivileges=true
+ProtectSystem=full
+
+[Install]
+WantedBy=multi-user.target
