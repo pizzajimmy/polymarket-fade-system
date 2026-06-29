@@ -13,8 +13,12 @@ from typing import Iterator
 log = logging.getLogger("scanner.gamma")
 
 GAMMA_BASE   = "https://gamma-api.polymarket.com"
-PAGE_SIZE    = 200     # max markets per request
-RATE_LIMIT_S = 0.5     # seconds between pages
+# The Gamma API hard-caps /markets responses at 100 rows regardless of `limit`.
+# PAGE_SIZE MUST equal that cap: the pager stops when a page returns < PAGE_SIZE,
+# so a larger value makes it quit after the first (capped) page and miss the
+# entire universe beyond the first 100 markets.
+PAGE_SIZE    = 100
+RATE_LIMIT_S = 0.4     # seconds between pages
 REQUEST_TIMEOUT = 15
 
 
@@ -173,6 +177,9 @@ def fetch_all_active_markets() -> Iterator[dict]:
             break
 
         offset += PAGE_SIZE
+        if offset > 200_000:        # safety: never spin forever on an unattended box
+            log.warning("Pagination guard hit at offset %d — stopping", offset)
+            break
         time.sleep(RATE_LIMIT_S)
 
     log.info(f"Total active markets fetched: {total_fetched}")
