@@ -32,8 +32,15 @@ def _get(path: str, params: dict = None, retries: int = 3) -> dict | list:
             r.raise_for_status()
             return r.json()
         except requests.HTTPError as e:
-            log.warning(f"HTTP {r.status_code} on {url} (attempt {attempt+1}): {e}")
-            if r.status_code == 429:
+            sc = r.status_code
+            # Gamma returns 422 when `offset` runs past the last page — a normal
+            # end-of-pagination signal, not an error. Other 4xx won't change on
+            # retry either, so treat any non-429 client error as "no more data".
+            if sc != 429 and 400 <= sc < 500:
+                log.info(f"HTTP {sc} on {url} — end of data, stopping pagination")
+                return []
+            log.warning(f"HTTP {sc} on {url} (attempt {attempt+1}): {e}")
+            if sc == 429:
                 time.sleep(5 * (attempt + 1))   # back off on rate limit
         except requests.RequestException as e:
             log.warning(f"Request error (attempt {attempt+1}): {e}")
