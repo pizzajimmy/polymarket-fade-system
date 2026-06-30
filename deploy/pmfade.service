@@ -16,7 +16,12 @@ Wants=network-online.target
 Type=simple
 User=pmfade
 WorkingDirectory=/opt/pmfade
-EnvironmentFile=/opt/pmfade/.env
+# DB path set here directly so a missing/blank .env can never misplace the
+# database or lose the durable path.
+Environment=PMFADE_DB=/var/lib/pmfade/pmfade.db
+# Leading '-' makes the env file OPTIONAL: a missing .env must not hard-fail the
+# service (run_portfolio.py loads .env on its own too, so this is belt-and-braces).
+EnvironmentFile=-/opt/pmfade/.env
 ExecStart=/opt/pmfade/venv/bin/python run_portfolio.py loop
 Restart=always
 RestartSec=30
