@@ -84,6 +84,7 @@ cp .env.example .env            # optional; defaults are fine for a dry run
 
 python run_portfolio.py run --dry-run   # one cycle, no Telegram
 python run_portfolio.py stats           # what's in the store
+python -m pmfade.status                 # health + per-strategy signal dashboard
 python -m pmfade.calibrate              # edge report (needs resolved signals)
 ```
 
@@ -123,6 +124,7 @@ pmfade/
   markets.py            universe fetch, categorization, resolved-state lookup
   engine.py             one scan cycle, end to end
   alerts.py             Telegram + healthcheck heartbeat
+  status.py             terminal health + signal dashboard
   calibrate.py          per-strategy edge report
   strategies/
     base.py             Signal · MarketView · Strategy contract
