@@ -147,6 +147,21 @@ CREATE TABLE IF NOT EXISTS scan_runs (
     elapsed_secs    REAL,
     error           TEXT
 );
+
+CREATE TABLE IF NOT EXISTS calibration_runs (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_at        TEXT NOT NULL,       -- when the calibration was recorded
+    cost          REAL,                -- cost assumption used
+    strategy_id   TEXT NOT NULL,
+    band          INTEGER,             -- score band (NULL = strategy overall)
+    n             INTEGER,             -- resolved signals in this cell
+    win_rate      REAL,                -- % net-positive
+    mean_ret_pts  REAL,                -- mean return, points, net of cost
+    mean_ret_pct  REAL,                -- mean return on capital % (secondary intuition)
+    ci_lo         REAL,                -- 95% CI on mean return (points) — the ✓ metric
+    ci_hi         REAL
+);
+CREATE INDEX IF NOT EXISTS idx_calib_run ON calibration_runs (run_at DESC, strategy_id);
 """
 
 
@@ -335,6 +350,30 @@ def finish_run(run_id: int, markets_seen: int, signals_emitted: int,
         c.execute("""UPDATE scan_runs SET finished_at=?, markets_seen=?,
                      signals_emitted=?, elapsed_secs=?, error=? WHERE id=?""",
                   (now_iso(), markets_seen, signals_emitted, elapsed_secs, error, run_id))
+
+
+def record_calibration(run_at: str, rows: list[dict]) -> None:
+    """Persist one calibration snapshot: one row per (strategy, band) cell."""
+    with connect() as c:
+        c.executemany("""
+            INSERT INTO calibration_runs
+                (run_at, cost, strategy_id, band, n, win_rate,
+                 mean_ret_pts, mean_ret_pct, ci_lo, ci_hi)
+            VALUES (:run_at, :cost, :strategy_id, :band, :n, :win_rate,
+                    :mean_ret_pts, :mean_ret_pct, :ci_lo, :ci_hi)
+        """, [{"run_at": run_at, **r} for r in rows])
+
+
+def calibration_history(strategy_id: str | None = None) -> list:
+    with connect() as c:
+        try:
+            if strategy_id:
+                return c.execute(
+                    "SELECT * FROM calibration_runs WHERE strategy_id=? ORDER BY run_at",
+                    (strategy_id,)).fetchall()
+            return c.execute("SELECT * FROM calibration_runs ORDER BY run_at").fetchall()
+        except sqlite3.OperationalError:
+            return []
 
 
 def db_stats() -> dict:
