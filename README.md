@@ -131,6 +131,7 @@ pmfade/
     news_fade.py  settlement_lag.py  longshot_bias.py  correlated_lag.py
   portfolio.py          the active strategy set
 deploy/pmfade.service   systemd unit
+dashboard/              local Streamlit UI (pulls a snapshot over SSH; see its README)
 ```
 
 The legacy single-strategy system (`scanner.py`, `alert_bot.py`, `run.py`,

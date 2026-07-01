@@ -12,6 +12,10 @@ prices.db
 !.env.example
 secrets.py
 
+# ── Local dashboard artifacts ────────────────────
+dashboard/server.txt
+dashboard/pmfade.db*
+
 # ── Positions data ───────────────────────────────
 # positions.json holds your live trades.
 # The example file (positions.example.json) is committed;
