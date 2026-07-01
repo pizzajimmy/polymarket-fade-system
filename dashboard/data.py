@@ -26,7 +26,7 @@ def load_frames(db_path: str):
         signals = pd.read_sql_query("SELECT * FROM signals", con)
         tracks  = pd.read_sql_query("SELECT signal_id, horizon, yes_price FROM signal_tracks", con)
         markets = pd.read_sql_query(
-            "SELECT condition_id, resolved, resolved_price FROM markets", con)
+            "SELECT condition_id, url AS market_url, resolved, resolved_price FROM markets", con)
         last_run = pd.read_sql_query(
             "SELECT * FROM scan_runs WHERE finished_at IS NOT NULL ORDER BY id DESC LIMIT 1", con)
         counts = {
@@ -49,6 +49,12 @@ def enrich(signals: pd.DataFrame, tracks: pd.DataFrame, markets: pd.DataFrame) -
         piv.columns.name = None
         df = df.merge(piv, on="signal_id", how="left")
     df = df.merge(markets, on="condition_id", how="left")
+
+    # Prefer the market's current URL (corrected event-slug link) over the URL
+    # snapshotted on the signal at insert time, so older signals' links self-heal.
+    if "market_url" in df.columns:
+        mu = df["market_url"].astype("string")
+        df["url"] = mu.where(mu.notna() & (mu.str.len() > 0), df["url"])
 
     res = df["resolution"] if "resolution" in df.columns else pd.Series(np.nan, index=df.index)
     resolved_price = df["resolved_price"] if "resolved_price" in df.columns \

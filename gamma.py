@@ -78,7 +78,23 @@ def _parse_market(m: dict) -> dict | None:
         token_id_yes = token_ids[0] if token_ids else ""
 
         slug = m.get("slug", "")
-        url  = f"https://polymarket.com/event/{slug}" if slug else ""
+        # Markets live under their parent EVENT's slug, not the market slug — using
+        # the market slug breaks the link for any multi-outcome event (e.g. the
+        # market "will-lebron-...-cavaliers" actually lives at event
+        # "nba-lebron-james-next-team"). Fall back to the market slug only when
+        # there's no event (single-market events share the same slug anyway).
+        events = m.get("events") or []
+        if isinstance(events, str):
+            import json as _json
+            try:
+                events = _json.loads(events)
+            except Exception:
+                events = []
+        event_slug = ""
+        if isinstance(events, list) and events and isinstance(events[0], dict):
+            event_slug = events[0].get("slug", "") or ""
+        link_slug = event_slug or slug
+        url  = f"https://polymarket.com/event/{link_slug}" if link_slug else ""
 
         # volume field was renamed from volume24hr to volume in the Gamma API
         volume = float(m.get("volume24hr") or m.get("volume") or 0)
