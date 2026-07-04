@@ -115,29 +115,32 @@ def section_quality_ev(df, cost):
                    "return?")
         return
 
-    sub["net_pct"] = (sub["ret_res"] - cost) / sub["entry_price"] * 100
+    sub["net_pts"] = sub["ret_res"] - cost
     g = (sub.groupby("band")
-            .agg(mean_net=("net_pct", "mean"), n=("net_pct", "size"),
-                 win=("ret_res", lambda s: 100 * (s > 0).mean()))
+            .agg(mean_net=("net_pts", "mean"), n=("net_pts", "size"),
+                 win=("net_pts", lambda s: 100 * (s > 0).mean()))
             .reset_index().dropna(subset=["band"]))
     g["label"] = g["band"].astype(int).astype(str) + "–" + (g["band"].astype(int) + 9).astype(str)
 
     fig = go.Figure(go.Bar(
-        x=g["label"], y=g["mean_net"].round(1),
+        x=g["label"], y=g["mean_net"].round(2),
         marker_color=["#2a78d6" if v >= 0 else "#d03b3b" for v in g["mean_net"]],
         customdata=np.stack([g["n"], g["win"].round(0)], axis=-1),
-        hovertemplate="score %{x}<br>%{y:+.1f}% on capital<br>n=%{customdata[0]}, "
-                      "win %{customdata[1]}%<extra></extra>"))
+        hovertemplate="score %{x}<br>%{y:+.2f}¢/trade net<br>n=%{customdata[0]}, "
+                      "net win %{customdata[1]}%<extra></extra>"))
     fig.add_hline(y=0, line_width=1, line_color="#888780")
     fig.update_layout(height=340, margin=dict(t=10, b=0, l=0, r=0),
-                      yaxis_title="mean return on capital (%)", xaxis_title="score band")
+                      yaxis_title="mean return (¢/trade, net of cost)", xaxis_title="score band")
     st.plotly_chart(fig, use_container_width=True)
+    st.caption("Win% and return are both net of cost. A strategy can resolve correctly "
+               "100% of the time yet lose money when the carry is smaller than the cost — "
+               "drag the cost slider to see how sensitive this is.")
 
     pos = g[g["mean_net"] > 0]
     if not pos.empty:
         thr = int(pos["band"].min())
         st.success(f"Edge turns positive at score {thr}+ "
-                   f"(mean {pos['mean_net'].iloc[0]:+.1f}% on capital, net of cost). "
+                   f"(mean {pos['mean_net'].iloc[0]:+.2f}¢/trade, net of cost). "
                    f"That's the band worth trading — raise this strategy's gate to it.")
     else:
         st.info("No score band is net-positive yet on this sample.")
