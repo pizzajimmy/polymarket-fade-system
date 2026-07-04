@@ -125,11 +125,13 @@ def section_quality_ev(df, cost):
     fig = go.Figure(go.Bar(
         x=g["label"], y=g["mean_net"].round(2),
         marker_color=["#2a78d6" if v >= 0 else "#d03b3b" for v in g["mean_net"]],
+        text=[f"{v:+.1f}¢ · n={int(n)}" for v, n in zip(g["mean_net"], g["n"])],
+        textposition="outside", cliponaxis=False, textfont=dict(size=11),
         customdata=np.stack([g["n"], g["win"].round(0)], axis=-1),
         hovertemplate="score %{x}<br>%{y:+.2f}¢/trade net<br>n=%{customdata[0]}, "
                       "net win %{customdata[1]}%<extra></extra>"))
     fig.add_hline(y=0, line_width=1, line_color="#888780")
-    fig.update_layout(height=340, margin=dict(t=10, b=0, l=0, r=0),
+    fig.update_layout(height=360, margin=dict(t=20, b=0, l=0, r=0),
                       yaxis_title="mean return (¢/trade, net of cost)", xaxis_title="score band")
     st.plotly_chart(fig, use_container_width=True)
     st.caption("Win% and return are both net of cost. A strategy can resolve correctly "
