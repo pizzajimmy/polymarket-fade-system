@@ -98,7 +98,15 @@ CREATE TABLE IF NOT EXISTS markets (
     resolved_price REAL,
     resolved_at    TEXT,
     first_seen     TEXT,
-    updated_at     TEXT
+    updated_at     TEXT,
+    description    TEXT DEFAULT '',
+    event_id       TEXT DEFAULT '',
+    event_slug     TEXT DEFAULT '',
+    neg_risk       INTEGER DEFAULT 0,
+    fees_enabled   INTEGER DEFAULT 0,
+    hardness       REAL,
+    hardness_flags TEXT,
+    family         TEXT
 );
 
 CREATE TABLE IF NOT EXISTS price_buffer (
@@ -107,7 +115,9 @@ CREATE TABLE IF NOT EXISTS price_buffer (
     yes_price    REAL NOT NULL,
     volume_24h   REAL,
     liquidity    REAL,
-    polled_at    TEXT NOT NULL
+    polled_at    TEXT NOT NULL,
+    best_bid     REAL,
+    best_ask     REAL
 );
 CREATE INDEX IF NOT EXISTS idx_buffer_cid_time
     ON price_buffer (condition_id, polled_at DESC);
@@ -148,6 +158,88 @@ CREATE TABLE IF NOT EXISTS scan_runs (
     error           TEXT
 );
 
+-- ── edge-v2: resolved-market history for the market-calibration surface ──────
+-- (distinct from calibration_runs, which snapshots OUR SIGNALS' calibration;
+--  hist_* + market_calibration describe THE MARKET's calibration)
+
+CREATE TABLE IF NOT EXISTS hist_markets (
+    condition_id TEXT PRIMARY KEY,
+    question     TEXT,
+    category     TEXT,
+    end_date     TEXT,
+    closed_time  TEXT,
+    final_yes    REAL,               -- resolved YES price in cents (~0 or ~100)
+    volume       REAL,               -- lifetime volume USDC
+    fetched_at   TEXT
+);
+
+CREATE TABLE IF NOT EXISTS hist_prices (
+    condition_id TEXT NOT NULL,
+    horizon      TEXT NOT NULL,      -- 24h | 7d | 30d | 90d (pre-close sample)
+    yes_price    REAL NOT NULL,      -- cents at that horizon
+    sampled_t    INTEGER,            -- unix ts of the sampled point
+    UNIQUE(condition_id, horizon)
+);
+CREATE INDEX IF NOT EXISTS idx_hist_prices_cid ON hist_prices (condition_id);
+
+CREATE TABLE IF NOT EXISTS market_calibration (
+    computed_at  TEXT NOT NULL,
+    category     TEXT NOT NULL,
+    horizon      TEXT NOT NULL,
+    decile       INTEGER,            -- 0..9 by implied price; NULL = slope row
+    implied_mean REAL,
+    realized_freq REAL,
+    n            INTEGER,
+    slope        REAL,               -- per category x horizon (on slope rows)
+    intercept    REAL
+);
+CREATE INDEX IF NOT EXISTS idx_mcalib ON market_calibration (computed_at DESC, category, horizon);
+
+CREATE TABLE IF NOT EXISTS edge_candidates (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts            TEXT NOT NULL,
+    condition_id  TEXT NOT NULL,
+    question      TEXT,
+    side          TEXT,
+    market_price  REAL,
+    fv            REAL,
+    anchor        REAL,
+    prior         REAL,
+    blend_w       REAL,
+    family        TEXT,
+    tier          INTEGER,
+    edge_gross    REAL,
+    fee_cost      REAL,
+    spread_cost   REAL,
+    edge_net      REAL,
+    edge_net_annualized REAL,
+    hardness      REAL,
+    gates_passed  TEXT,              -- JSON list of gate names
+    emitted       INTEGER DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_candidates_ts ON edge_candidates (ts DESC);
+
+CREATE TABLE IF NOT EXISTS structure_alerts (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts         TEXT NOT NULL,
+    kind       TEXT NOT NULL,        -- LADDER | NEGRISK
+    event_slug TEXT,
+    detail     TEXT
+);
+
+CREATE TABLE IF NOT EXISTS pending_fades (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    condition_id TEXT NOT NULL,
+    direction    TEXT NOT NULL,      -- DROP | SPIKE
+    detected_at  TEXT NOT NULL,
+    ref_price    REAL,               -- yes price at detection
+    fv_at_detect REAL,
+    status       TEXT DEFAULT 'pending',  -- pending | promoted | suppressed | expired
+    reason       TEXT,
+    decided_at   TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_pending_fades ON pending_fades (condition_id, status);
+
 CREATE TABLE IF NOT EXISTS calibration_runs (
     id            INTEGER PRIMARY KEY AUTOINCREMENT,
     run_at        TEXT NOT NULL,       -- when the calibration was recorded
@@ -165,27 +257,79 @@ CREATE INDEX IF NOT EXISTS idx_calib_run ON calibration_runs (run_at DESC, strat
 """
 
 
+def _ensure_columns(con: sqlite3.Connection, table: str, cols: dict[str, str]) -> None:
+    """Idempotent ALTER-based migration for databases created before a column
+    existed (the live VPS DB predates the edge-v2 schema)."""
+    have = {r[1] for r in con.execute(f"PRAGMA table_info({table})").fetchall()}
+    for name, decl in cols.items():
+        if name not in have:
+            con.execute(f"ALTER TABLE {table} ADD COLUMN {name} {decl}")
+            log.info("Migrated: %s += %s", table, name)
+
+
 def init_db() -> None:
     with connect() as c:
         c.executescript(SCHEMA)
+        _ensure_columns(c, "markets", {
+            "description":    "TEXT DEFAULT ''",
+            "event_id":       "TEXT DEFAULT ''",
+            "event_slug":     "TEXT DEFAULT ''",
+            "neg_risk":       "INTEGER DEFAULT 0",
+            "fees_enabled":   "INTEGER DEFAULT 0",
+            "hardness":       "REAL",
+            "hardness_flags": "TEXT",
+            "family":         "TEXT",
+        })
+        _ensure_columns(c, "price_buffer", {
+            "best_bid": "REAL",
+            "best_ask": "REAL",
+        })
     log.info("Store ready: %s", DB_PATH.resolve())
 
 
 # ── Markets ────────────────────────────────────────────────────────────────────
 
 def upsert_market(condition_id: str, question: str, slug: str = "", url: str = "",
-                  token_id_yes: str = "", category: str = "", end_date: str = "") -> None:
+                  token_id_yes: str = "", category: str = "", end_date: str = "",
+                  description: str = "", event_id: str = "", event_slug: str = "",
+                  neg_risk: int = 0, fees_enabled: int = 0) -> None:
+    # NB: hardness / hardness_flags / family are computed fields (Modules C/B) —
+    # deliberately NOT touched here so scan upserts don't clobber them.
     ts = now_iso()
     with connect() as c:
         c.execute("""
             INSERT INTO markets (condition_id, question, slug, url, token_id_yes,
-                                 category, end_date, first_seen, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                 category, end_date, description, event_id,
+                                 event_slug, neg_risk, fees_enabled,
+                                 first_seen, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(condition_id) DO UPDATE SET
                 question=excluded.question, slug=excluded.slug, url=excluded.url,
                 token_id_yes=excluded.token_id_yes, category=excluded.category,
-                end_date=excluded.end_date, updated_at=excluded.updated_at
-        """, (condition_id, question, slug, url, token_id_yes, category, end_date, ts, ts))
+                end_date=excluded.end_date, description=excluded.description,
+                event_id=excluded.event_id, event_slug=excluded.event_slug,
+                neg_risk=excluded.neg_risk, fees_enabled=excluded.fees_enabled,
+                updated_at=excluded.updated_at
+        """, (condition_id, question, slug, url, token_id_yes, category, end_date,
+              description, event_id, event_slug, neg_risk, fees_enabled, ts, ts))
+
+
+def set_market_computed(condition_id: str, hardness: Optional[float] = None,
+                        hardness_flags: Optional[str] = None,
+                        family: Optional[str] = None) -> None:
+    """Update the computed (non-ingested) market fields; None leaves a field as-is."""
+    sets, args = [], []
+    if hardness is not None:
+        sets.append("hardness=?");       args.append(hardness)
+    if hardness_flags is not None:
+        sets.append("hardness_flags=?"); args.append(hardness_flags)
+    if family is not None:
+        sets.append("family=?");         args.append(family)
+    if not sets:
+        return
+    args.append(condition_id)
+    with connect() as c:
+        c.execute(f"UPDATE markets SET {', '.join(sets)} WHERE condition_id=?", args)
 
 
 def get_market(condition_id: str) -> Optional[sqlite3.Row]:
@@ -211,12 +355,16 @@ def unresolved_market_ids() -> set[str]:
 
 def record_price(condition_id: str, yes_price: float,
                  volume_24h: Optional[float] = None,
-                 liquidity: Optional[float] = None, at: Optional[str] = None) -> None:
+                 liquidity: Optional[float] = None, at: Optional[str] = None,
+                 best_bid: Optional[float] = None,
+                 best_ask: Optional[float] = None) -> None:
     with connect() as c:
         c.execute("""INSERT INTO price_buffer
-                     (condition_id, yes_price, volume_24h, liquidity, polled_at)
-                     VALUES (?, ?, ?, ?, ?)""",
-                  (condition_id, yes_price, volume_24h, liquidity, at or now_iso()))
+                     (condition_id, yes_price, volume_24h, liquidity, polled_at,
+                      best_bid, best_ask)
+                     VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                  (condition_id, yes_price, volume_24h, liquidity, at or now_iso(),
+                   best_bid, best_ask))
 
 
 def latest_price(condition_id: str) -> Optional[float]:
@@ -350,6 +498,51 @@ def finish_run(run_id: int, markets_seen: int, signals_emitted: int,
         c.execute("""UPDATE scan_runs SET finished_at=?, markets_seen=?,
                      signals_emitted=?, elapsed_secs=?, error=? WHERE id=?""",
                   (now_iso(), markets_seen, signals_emitted, elapsed_secs, error, run_id))
+
+
+# ── Resolved-market history (market-calibration substrate) ────────────────────
+
+def hist_has(condition_id: str) -> bool:
+    with connect() as c:
+        return c.execute("SELECT 1 FROM hist_markets WHERE condition_id=?",
+                         (condition_id,)).fetchone() is not None
+
+
+def hist_upsert_market(condition_id: str, question: str, category: str,
+                       end_date: str, closed_time: str, final_yes: float,
+                       volume: float) -> None:
+    with connect() as c:
+        c.execute("""INSERT INTO hist_markets
+                     (condition_id, question, category, end_date, closed_time,
+                      final_yes, volume, fetched_at)
+                     VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                     ON CONFLICT(condition_id) DO UPDATE SET
+                       final_yes=excluded.final_yes, closed_time=excluded.closed_time,
+                       volume=excluded.volume, fetched_at=excluded.fetched_at""",
+                  (condition_id, question, category, end_date, closed_time,
+                   final_yes, volume, now_iso()))
+
+
+def hist_record_price(condition_id: str, horizon: str, yes_price: float,
+                      sampled_t: Optional[int] = None) -> None:
+    with connect() as c:
+        c.execute("""INSERT OR IGNORE INTO hist_prices
+                     (condition_id, horizon, yes_price, sampled_t)
+                     VALUES (?, ?, ?, ?)""",
+                  (condition_id, horizon, yes_price, sampled_t))
+
+
+def hist_stats() -> dict:
+    with connect() as c:
+        markets_n = c.execute("SELECT COUNT(*) FROM hist_markets").fetchone()[0]
+        samples_n = c.execute("SELECT COUNT(*) FROM hist_prices").fetchone()[0]
+        cells = c.execute("""
+            SELECT m.category, p.horizon, COUNT(*) n
+            FROM hist_prices p JOIN hist_markets m ON m.condition_id=p.condition_id
+            GROUP BY m.category, p.horizon ORDER BY m.category, p.horizon
+        """).fetchall()
+    return {"markets": markets_n, "samples": samples_n,
+            "cells": [(r["category"], r["horizon"], r["n"]) for r in cells]}
 
 
 def record_calibration(run_at: str, rows: list[dict]) -> None:

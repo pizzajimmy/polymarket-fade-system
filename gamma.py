@@ -49,10 +49,14 @@ def _get(path: str, params: dict = None, retries: int = 3) -> dict | list:
     return []
 
 
-def _parse_market(m: dict) -> dict | None:
+def _parse_market(m: dict, allow_resolved: bool = False) -> dict | None:
     """
     Extract the fields we care about from a raw Gamma API market object.
     Returns None if the market is unusable (no price, already closed, etc).
+
+    allow_resolved=True keeps markets priced <1¢/>99¢ — required by the
+    calibration backfill, which ingests RESOLVED markets whose final
+    outcomePrices are exactly 0/100 and would otherwise be dropped here.
     """
     try:
         # outcomePrices can arrive as a real list ["0.38","0.62"]
@@ -67,7 +71,7 @@ def _parse_market(m: dict) -> dict | None:
         yes_price = float(outcome_prices[0]) * 100    # convert to cents
 
         # Some markets resolve near 0/100 — skip fully resolved ones
-        if yes_price < 1 or yes_price > 99:
+        if not allow_resolved and (yes_price < 1 or yes_price > 99):
             return None
 
         # clobTokenIds: [yes_token, no_token] — may also arrive as a JSON string
@@ -91,13 +95,22 @@ def _parse_market(m: dict) -> dict | None:
             except Exception:
                 events = []
         event_slug = ""
+        ev0: dict = {}
         if isinstance(events, list) and events and isinstance(events[0], dict):
-            event_slug = events[0].get("slug", "") or ""
+            ev0 = events[0]
+            event_slug = ev0.get("slug", "") or ""
         link_slug = event_slug or slug
         url  = f"https://polymarket.com/event/{link_slug}" if link_slug else ""
 
         # volume field was renamed from volume24hr to volume in the Gamma API
         volume = float(m.get("volume24hr") or m.get("volume") or 0)
+
+        def _cents(v):
+            """0-1 price string/float -> cents, or None."""
+            try:
+                return round(float(v) * 100, 2) if v not in (None, "") else None
+            except (TypeError, ValueError):
+                return None
 
         return {
             "condition_id":  m.get("conditionId", ""),
@@ -110,6 +123,18 @@ def _parse_market(m: dict) -> dict | None:
             "liquidity":     float(m.get("liquidity", 0) or 0),
             "end_date":      m.get("endDate", ""),
             "category":      _infer_category(m.get("question", "")),
+            # ── edge-v2 fields ────────────────────────────────────────────
+            "description":   m.get("description", "") or "",
+            "fees_enabled":  1 if m.get("feesEnabled") in (True, "true", "True", 1) else 0,
+            "neg_risk":      1 if m.get("negRisk") in (True, "true", "True", 1) else 0,
+            "neg_risk_market_id": m.get("negRiskMarketID", "") or "",
+            "event_id":      str(ev0.get("id", "") or ""),
+            "event_slug":    event_slug,
+            "best_bid":      _cents(m.get("bestBid")),
+            "best_ask":      _cents(m.get("bestAsk")),
+            "closed_time":   ev0.get("closedTime", "") or "",
+            "closed":        m.get("closed") in (True, "true", "True", 1),
+            "volume_total":  float(m.get("volume") or 0),   # lifetime, for backfill filter
         }
     except Exception as e:
         log.warning(f"Skipping market {m.get('conditionId','?')[:16]}: {type(e).__name__}: {e}")

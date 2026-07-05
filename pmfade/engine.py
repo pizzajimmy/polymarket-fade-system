@@ -66,6 +66,13 @@ def build_view(m: dict) -> MarketView:
         reading_count=reading_count,
         window_min=min(window) if window else None,
         window_max=max(window) if window else None,
+        description=m.get("description", ""),
+        event_id=m.get("event_id", ""),
+        event_slug=m.get("event_slug", ""),
+        neg_risk=m.get("neg_risk", 0) or 0,
+        fees_enabled=m.get("fees_enabled", 0) or 0,
+        best_bid=m.get("best_bid"),
+        best_ask=m.get("best_ask"),
     )
 
 
@@ -150,8 +157,14 @@ def run_cycle(dry_run: bool = False) -> dict:
             cid = m["condition_id"]
             active_cids.add(cid)
             store.upsert_market(cid, m["question"], m.get("slug", ""), m.get("url", ""),
-                                m.get("token_id_yes", ""), m["category"], m.get("end_date", ""))
-            store.record_price(cid, m["yes_price"], m.get("volume_24h"), m.get("liquidity"))
+                                m.get("token_id_yes", ""), m["category"], m.get("end_date", ""),
+                                description=m.get("description", ""),
+                                event_id=m.get("event_id", ""),
+                                event_slug=m.get("event_slug", ""),
+                                neg_risk=m.get("neg_risk", 0) or 0,
+                                fees_enabled=m.get("fees_enabled", 0) or 0)
+            store.record_price(cid, m["yes_price"], m.get("volume_24h"), m.get("liquidity"),
+                               best_bid=m.get("best_bid"), best_ask=m.get("best_ask"))
             views.append(build_view(m))
 
         ctx = Context(store=store, universe=views)

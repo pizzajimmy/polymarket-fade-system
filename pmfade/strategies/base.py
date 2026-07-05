@@ -62,6 +62,15 @@ class MarketView:
     reading_count:      int = 0
     window_min:         Optional[float] = None
     window_max:         Optional[float] = None
+    # edge-v2 fields (populated from the Gamma payload; defaults keep old
+    # synthetic-universe tests valid)
+    description:        str = ""
+    event_id:           str = ""
+    event_slug:         str = ""
+    neg_risk:           int = 0
+    fees_enabled:       int = 0
+    best_bid:           Optional[float] = None   # cents
+    best_ask:           Optional[float] = None   # cents
 
     @property
     def no_price(self) -> float:

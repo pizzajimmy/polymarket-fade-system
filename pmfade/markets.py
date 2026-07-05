@@ -58,7 +58,7 @@ def is_weather(question: str) -> bool:
 
 _CRYPTO = ["bitcoin", "btc", "ethereum", " eth ", "crypto", "solana", " sol ",
            "xrp", "dogecoin", "memecoin", "defi", "blockchain", "coinbase",
-           "binance", "token", "stablecoin", "altcoin"]
+           "binance", "token", "stablecoin", "altcoin", "fdv", "airdrop"]
 _STOCKS = ["nvda", "nvidia", "tesla", "tsla", "apple", "aapl", "google", "googl",
            "amazon", "amzn", "microsoft", "msft", "meta ", "s&p 500", "nasdaq",
            "dow jones", "stock", "share price", "close above", "close below",
