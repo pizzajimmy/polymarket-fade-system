@@ -118,6 +118,18 @@ def catch_resolutions(active_cids: set[str]) -> int:
         for sid in store.signal_ids_for_condition(cid):
             store.record_track(sid, "resolution", rp)
         n += 1
+        # Grow the market-calibration substrate from live operation: one
+        # prices-history call per (rare) resolution. Never let it break tracking.
+        try:
+            from . import backfill
+            backfill.ingest_resolved_market(
+                {"condition_id": cid, "token_id_yes": mkt["token_id_yes"] or "",
+                 "question": mkt["question"], "category": mkt["category"] or "politics",
+                 "end_date": mkt["end_date"] or "", "closed_time": "",
+                 "volume_total": 0},
+                final_yes=rp)
+        except Exception as e:
+            log.warning("hist ingest failed for %s: %s", cid[:12], e)
     return n
 
 
@@ -148,6 +160,13 @@ def run_cycle(dry_run: bool = False) -> dict:
     error = None
 
     try:
+        # Module A: refresh the market-calibration surface weekly (cheap, DB-only).
+        try:
+            from . import market_calib
+            market_calib.maybe_recompute()
+        except Exception as e:
+            log.warning("market_calib recompute skipped: %s", e)
+
         for m in mk.fetch_universe():
             seen += 1
             if mk.is_fixture(m["question"]) or m["category"] in ("sports", "weather"):
