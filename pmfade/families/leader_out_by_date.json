@@ -1,0 +1,22 @@
+{
+  "family": "leader_out_by_date",
+  "priority": 40,
+  "tier": 2,
+  "anchor_fn": "leader_out_by_date",
+  "match": {
+    "any": [
+      "out as (president|prime minister|pm\\b|chancellor)",
+      "\\bresigns? (as|by|before)\\b",
+      "removed from office",
+      "leave office (by|before)",
+      "step(s)? down (as|by|before)"
+    ],
+    "none": ["\\bimpeach"]
+  },
+  "params": {
+    "removal_annual": 0.002,
+    "resign_annual": 0.02,
+    "default_age": 70,
+    "mortality_adj": 0.6
+  }
+}

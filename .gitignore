@@ -16,6 +16,9 @@ secrets.py
 dashboard/server.txt
 dashboard/pmfade.db*
 
+# ── Operator anchor overrides (live judgment calls, not source) ──
+anchors_manual.json
+
 # ── Positions data ───────────────────────────────
 # positions.json holds your live trades.
 # The example file (positions.example.json) is committed;

@@ -1,0 +1,17 @@
+{
+  "family": "legal_outcome_by_date",
+  "priority": 50,
+  "tier": 3,
+  "anchor_fn": "legal_outcome_by_date",
+  "match": {
+    "any": [
+      "\\b(convicted|indicted|found guilty|sentenced|jailed|imprisoned)\\b",
+      "\\bcharged with\\b",
+      "go(es)? to (prison|jail)"
+    ],
+    "none": []
+  },
+  "params": {
+    "stage_durations": {"none": 180, "investigation": 150, "charged": 270, "trial": 90}
+  }
+}

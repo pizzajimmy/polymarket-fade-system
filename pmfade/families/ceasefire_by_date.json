@@ -1,0 +1,16 @@
+{
+  "family": "ceasefire_by_date",
+  "priority": 30,
+  "tier": 1,
+  "anchor_fn": "ceasefire_by_date",
+  "match": {
+    "any": ["\\bceasefire\\b", "\\btruce\\b"],
+    "none": ["\\bviolat", "\\bbreak(s|ing)?\\b.*ceasefire", "ceasefire.*\\bend(s|ing)?\\b"]
+  },
+  "params": {
+    "signing_buffer_days": 3,
+    "hold_days": 10,
+    "floor_prob": 0.0075,
+    "stage_probs": {"none": 0.03, "talks": 0.08, "framework": 0.18}
+  }
+}

@@ -1,0 +1,24 @@
+{
+  "family": "constitutional_impossibility",
+  "priority": 10,
+  "tier": 1,
+  "anchor_fn": "constitutional_impossibility",
+  "match": {
+    "any": [
+      "\\bthird term\\b",
+      "\\b22nd amendment\\b",
+      "\\bconstitutional amendment\\b",
+      "repeal the \\d+(st|nd|rd|th) amendment",
+      "\\bannex(es|ing)?\\b",
+      "\\b51st state\\b",
+      "become (a|the) (51st )?state\\b",
+      "\\bacquire (greenland|canada|panama)"
+    ],
+    "none": []
+  },
+  "params": {
+    "base_prob": 0.005,
+    "per_year": 0.01,
+    "threshold_note": "2/3 both chambers + 38 states, or treaty + counterparty consent + Senate ratification"
+  }
+}

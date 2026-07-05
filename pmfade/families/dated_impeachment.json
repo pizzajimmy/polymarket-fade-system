@@ -1,0 +1,17 @@
+{
+  "family": "dated_impeachment",
+  "priority": 20,
+  "tier": 1,
+  "anchor_fn": "dated_impeachment",
+  "match": {
+    "any": ["\\bimpeach"],
+    "none": []
+  },
+  "params": {
+    "base_prob": 0.005,
+    "seating_jump": 0.02,
+    "path_prob": 0.10,
+    "friendly_chamber_prob": 0.03,
+    "controlling_party_opposed": true
+  }
+}

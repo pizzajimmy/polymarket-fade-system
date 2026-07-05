@@ -1,0 +1,15 @@
+{
+  "_comment": "Copy to anchors_manual.json (gitignored). Keys are a market's condition_id OR slug. `anchor` is a PROBABILITY (0-1) and beats the family model. `expiry` forces re-review — expired overrides are ignored and alerted. Extra keys become input overrides for the family's anchor_fn (e.g. deal_signed, negotiation_stage, age, process_stage, floor_path_exists).",
+
+  "example-ceasefire-slug": {
+    "negotiation_stage": "talks",
+    "note": "framework reported but unsigned per Reuters 2026-07-01",
+    "expiry": "2026-08-01"
+  },
+  "0xexamplecondid": {
+    "anchor": 0.03,
+    "tier": 2,
+    "note": "hand-set: chamber math + stated posture",
+    "expiry": "2026-09-01"
+  }
+}

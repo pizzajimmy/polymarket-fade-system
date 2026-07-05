@@ -20,10 +20,14 @@ from datetime import datetime, timezone
 
 from . import store, config as C, alerts
 from . import markets as mk
+from . import hardness, anchors
 from .strategies.base import MarketView, Context
 from .portfolio import build_portfolio
 
 log = logging.getLogger("pmfade.engine")
+
+# per-process cache so hardness/family DB writes happen only on change
+_computed_cache: dict = {}
 
 
 # ── Feature computation ────────────────────────────────────────────────────────
@@ -184,6 +188,16 @@ def run_cycle(dry_run: bool = False) -> dict:
                                 fees_enabled=m.get("fees_enabled", 0) or 0)
             store.record_price(cid, m["yes_price"], m.get("volume_24h"), m.get("liquidity"),
                                best_bid=m.get("best_bid"), best_ask=m.get("best_ask"))
+
+            # Modules C/B observability: hardness + family cached on the market
+            # row (dashboard/queries); recomputed only when inputs change.
+            h, flags = hardness.score(m.get("description", ""))
+            fam = anchors.family_name(m["question"]) or ""
+            if _computed_cache.get(cid) != (h, fam):
+                store.set_market_computed(cid, hardness=h, hardness_flags=flags,
+                                          family=fam)
+                _computed_cache[cid] = (h, fam)
+
             views.append(build_view(m))
 
         ctx = Context(store=store, universe=views)
@@ -205,6 +219,15 @@ def run_cycle(dry_run: bool = False) -> dict:
         resolved = catch_resolutions(active_cids)
         store.prune_buffer()
         notified = notify_new_signals() if not dry_run else 0
+
+        # expired manual anchor overrides -> operator alert (once per process)
+        for key, note in anchors.take_expired_alerts():
+            msg = (f"⚠️ <b>Anchor override expired</b>\n<code>{key}</code>\n"
+                   f"{note or '(no note)'}\nRefresh or remove it in anchors_manual.json.")
+            if not dry_run:
+                alerts.send_telegram(msg)
+            else:
+                log.info("[DRY] expired override: %s", key)
 
     except Exception as e:
         error = repr(e)
