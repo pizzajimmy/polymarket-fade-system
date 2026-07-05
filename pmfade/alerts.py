@@ -15,7 +15,8 @@ TG_TOKEN = os.environ.get("TG_TOKEN", "")
 TG_CHAT  = os.environ.get("TG_CHAT_ID", "")
 
 _EMOJI = {"news_fade": "📰", "settlement_lag": "⏳",
-          "longshot_bias": "🎯", "correlated_lag": "🔗"}
+          "longshot_bias": "🎯", "correlated_lag": "🔗",
+          "edge_v2": "🧭", "news_fade_v2": "🕵️"}
 
 
 def send_telegram(text: str) -> bool:

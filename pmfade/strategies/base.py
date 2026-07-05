@@ -71,6 +71,7 @@ class MarketView:
     fees_enabled:       int = 0
     best_bid:           Optional[float] = None   # cents
     best_ask:           Optional[float] = None   # cents
+    volume_total:       float = 0.0              # lifetime USDC (gate: EV2_MIN_VOLUME)
 
     @property
     def no_price(self) -> float:

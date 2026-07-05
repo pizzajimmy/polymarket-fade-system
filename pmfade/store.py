@@ -484,6 +484,53 @@ def mark_notified(signal_id: str) -> None:
         c.execute("UPDATE signals SET notified=1 WHERE signal_id=?", (signal_id,))
 
 
+# ── edge_v2 candidates + structural screens ────────────────────────────────────
+
+_CANDIDATE_COLS = ["ts", "condition_id", "question", "side", "market_price", "fv",
+                   "anchor", "prior", "blend_w", "family", "tier", "edge_gross",
+                   "fee_cost", "spread_cost", "edge_net", "edge_net_annualized",
+                   "hardness", "gates_passed", "emitted"]
+
+
+def insert_edge_candidate(row: dict) -> None:
+    row = {**{c: None for c in _CANDIDATE_COLS}, **row, "ts": row.get("ts") or now_iso()}
+    with connect() as c:
+        c.execute(f"""INSERT INTO edge_candidates ({', '.join(_CANDIDATE_COLS)})
+                      VALUES ({', '.join(':' + c_ for c_ in _CANDIDATE_COLS)})""", row)
+
+
+def prune_edge_candidates(days: int) -> int:
+    cutoff = iso_days_ago(days)
+    with connect() as c:
+        return c.execute("DELETE FROM edge_candidates WHERE ts < ?", (cutoff,)).rowcount
+
+
+def latest_candidates(limit: int = 50) -> list[sqlite3.Row]:
+    """Candidates from the most recent scan batch (same 10-minute bucket)."""
+    with connect() as c:
+        last = c.execute("SELECT MAX(ts) m FROM edge_candidates").fetchone()["m"]
+        if not last:
+            return []
+        bucket = last[:15]   # YYYY-MM-DDTHH:M — one scan's inserts share it
+        return c.execute("""SELECT * FROM edge_candidates WHERE substr(ts,1,15)=?
+                            ORDER BY edge_net_annualized DESC LIMIT ?""",
+                         (bucket, limit)).fetchall()
+
+
+def structure_alert_recent(kind: str, event_slug: str, hours: float = 24) -> bool:
+    cutoff = iso_hours_ago(hours)
+    with connect() as c:
+        return c.execute("""SELECT 1 FROM structure_alerts
+                            WHERE kind=? AND event_slug=? AND ts>=? LIMIT 1""",
+                         (kind, event_slug, cutoff)).fetchone() is not None
+
+
+def insert_structure_alert(kind: str, event_slug: str, detail: str) -> None:
+    with connect() as c:
+        c.execute("INSERT INTO structure_alerts (ts, kind, event_slug, detail) VALUES (?,?,?,?)",
+                  (now_iso(), kind, event_slug, detail))
+
+
 # ── Scan runs (observability) ──────────────────────────────────────────────────
 
 def start_run() -> int:

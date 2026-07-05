@@ -77,6 +77,7 @@ def build_view(m: dict) -> MarketView:
         fees_enabled=m.get("fees_enabled", 0) or 0,
         best_bid=m.get("best_bid"),
         best_ask=m.get("best_ask"),
+        volume_total=m.get("volume_total", 0) or 0,
     )
 
 
@@ -135,6 +136,62 @@ def catch_resolutions(active_cids: set[str]) -> int:
         except Exception as e:
             log.warning("hist ingest failed for %s: %s", cid[:12], e)
     return n
+
+
+# ── Structural screens (handoff §5: near-free alpha + sanity checks) ──────────
+
+def run_structure_screens(views: list[MarketView], dry_run: bool) -> int:
+    """Ladder monotonicity + negRisk ΣYES checks across event groups."""
+    fired = 0
+    groups: dict[str, list[MarketView]] = {}
+    for v in views:
+        if v.event_slug:
+            groups.setdefault(v.event_slug, []).append(v)
+
+    for slug, vs in groups.items():
+        if len(vs) < 2:
+            continue
+
+        # negRisk: mutually-exclusive outcomes should sum to ~1. Legs priced
+        # <1¢ are filtered upstream, which only LOWERS the sum — so alert on
+        # over-sum only (that's the actionable sell-the-book shape anyway).
+        if any(v.neg_risk for v in vs) and len(vs) >= 3:
+            total = sum(v.yes_price for v in vs) / 100.0
+            if total >= 1.06 and not store.structure_alert_recent("NEGRISK", slug):
+                detail = f"sum(YES)={total:.2f} across {len(vs)} visible legs"
+                store.insert_structure_alert("NEGRISK", slug, detail)
+                fired += 1
+                if not dry_run:
+                    alerts.send_telegram(
+                        f"🧮 <b>NegRisk over-sum</b>\n<i>{vs[0].question[:70]}…</i>\n"
+                        f"{detail}\nhttps://polymarket.com/event/{slug}")
+                log.info("[screen] NEGRISK %s: %s", slug[:40], detail)
+
+        # date-ladder monotonicity within one anchor family:
+        # P(by earlier date) must be <= P(by later date) (+tolerance)
+        fams: dict[str, list[MarketView]] = {}
+        for v in vs:
+            fam = anchors.family_name(v.question)
+            if fam and v.end_date:
+                fams.setdefault(fam, []).append(v)
+        for fam, lvs in fams.items():
+            if len(lvs) < 2:
+                continue
+            lvs.sort(key=lambda v: v.end_date)
+            for a, b in zip(lvs, lvs[1:]):
+                if a.end_date != b.end_date and a.yes_price > b.yes_price + 1.5:
+                    if not store.structure_alert_recent("LADDER", slug):
+                        detail = (f"[{fam}] P(by {a.end_date[:10]})={a.yes_price:.0f}¢ "
+                                  f"> P(by {b.end_date[:10]})={b.yes_price:.0f}¢")
+                        store.insert_structure_alert("LADDER", slug, detail)
+                        fired += 1
+                        if not dry_run:
+                            alerts.send_telegram(
+                                f"🪜 <b>Ladder violation</b>\n<i>{a.question[:70]}…</i>\n"
+                                f"{detail}\nhttps://polymarket.com/event/{slug}")
+                        log.info("[screen] LADDER %s: %s", slug[:40], detail)
+                    break
+    return fired
 
 
 # ── Notifications ──────────────────────────────────────────────────────────────
@@ -215,9 +272,14 @@ def run_cycle(dry_run: bool = False) -> dict:
                     emitted += 1
                     log.info("  [%s] %.0f  %s", sig.strategy_id, sig.score, sig.rationale[:80])
 
+        screens = run_structure_screens(views, dry_run)
+        if screens:
+            log.info("structure screens fired: %d", screens)
+
         tracked = track_open_signals()
         resolved = catch_resolutions(active_cids)
         store.prune_buffer()
+        store.prune_edge_candidates(C.CANDIDATES_RETAIN_DAYS)
         notified = notify_new_signals() if not dry_run else 0
 
         # expired manual anchor overrides -> operator alert (once per process)
