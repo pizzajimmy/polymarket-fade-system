@@ -188,6 +188,64 @@ def _fmt_bands(bands):
               f"{s['mean_ret_pts']:>+8.1f}{ci:>18}{cap:>7}{flag}")
 
 
+def _anchor_calibration(sigs, tracks, resolved):
+    """Are our FAIR VALUES themselves calibrated? (handoff §8 monitor, signal-
+    only remnant of Module G.) For each resolved v2 signal, compare the
+    FV-implied win probability of the position against what happened."""
+    import json as _json
+    rows = []
+    for s in sigs:
+        if s["strategy_id"] not in ("edge_v2", "news_fade_v2"):
+            continue
+        later = tracks.get(s["signal_id"], {}).get("resolution",
+                                                   resolved.get(s["condition_id"]))
+        if later is None:
+            continue
+        try:
+            f = _json.loads(s["features"] or "{}")
+        except Exception:
+            continue
+        fv = f.get("fv")
+        if fv is None:
+            continue
+        implied = fv / 100 if s["side"] == "YES" else (100 - fv) / 100
+        won = position_return(s["side"], s["entry_price"], later) > 0
+        rows.append((f.get("family") or "prior-only", implied, 1 if won else 0))
+    if not rows:
+        return
+    print("\n▸ anchor calibration — FV-implied vs realized win rate (v2, resolved)")
+    print(f"    {'family':<26}{'n':>4}{'implied':>9}{'realized':>10}")
+    by: dict[str, list] = {}
+    for fam, imp, won in rows:
+        by.setdefault(fam, []).append((imp, won))
+    for fam, v in sorted(by.items(), key=lambda kv: -len(kv[1])):
+        imp = 100 * st.mean(x for x, _ in v)
+        real = 100 * st.mean(w for _, w in v)
+        flag = "  ⚠ overconfident" if real < imp - 15 and len(v) >= 10 else ""
+        print(f"    {fam:<26}{len(v):>4}{imp:>8.0f}%{real:>9.0f}%{flag}")
+
+
+def _v1_v2_overlap(sigs, tracks, resolved, cost):
+    """Same-market comparison: longshot_bias (v1) vs edge_v2 where both fired."""
+    v1 = {s["condition_id"]: s for s in sigs if s["strategy_id"] == "longshot_bias"}
+    v2 = {s["condition_id"]: s for s in sigs if s["strategy_id"] == "edge_v2"}
+    common = sorted(v1.keys() & v2.keys())
+    if not common:
+        return
+    def ret(s):
+        later = tracks.get(s["signal_id"], {}).get("resolution",
+                                                   resolved.get(s["condition_id"]))
+        return None if later is None else position_return(s["side"], s["entry_price"],
+                                                          later) - cost
+    pairs = [(ret(v1[c]), ret(v2[c])) for c in common]
+    pairs = [(a, b) for a, b in pairs if a is not None and b is not None]
+    print(f"\n▸ v1 vs v2 on overlapping markets — {len(common)} shared, "
+          f"{len(pairs)} resolved")
+    if pairs:
+        print(f"    longshot_bias  mean {st.mean(a for a, _ in pairs):+.2f}¢/trade net")
+        print(f"    edge_v2        mean {st.mean(b for _, b in pairs):+.2f}¢/trade net")
+
+
 def report(cost: float = 2.0):
     sigs, tracks, resolved, strategies, per = compute(cost)
     n_resolved = sum(1 for s in sigs if _has_resolution(s, tracks, resolved))
@@ -215,6 +273,9 @@ def report(cost: float = 2.0):
         if d["bands"]:
             print("    by score band (resolution, net of cost):")
             _fmt_bands(d["bands"])
+
+    _anchor_calibration(sigs, tracks, resolved)
+    _v1_v2_overlap(sigs, tracks, resolved, cost)
 
     print("\n" + "─" * 64)
     print("Reading it: ✓ marks cells whose 95% CI on mean return is entirely above 0")

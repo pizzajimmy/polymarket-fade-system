@@ -59,6 +59,15 @@ the tracks are truth.
 | `settlement_lag` | effectively-decided market trading a few cents off the boundary | the near-certain side |
 | `longshot_bias` | longshots are systematically overpriced (basket edge) | NO on cheap longshots |
 | `correlated_lag` | related market hasn't repriced yet | the laggard, in the trigger's direction |
+| `edge_v2` | anchored fair value (structural family model + own calibration surface), net of fees/spread/hardness/carry | the expensive side of a mispriced longshot |
+| `news_fade_v2` | cooled-down fades gated on FV deviation + hold-to-resolution viability; operator confirms no structural input changed | fade direction |
+
+v2 signals ride on a market-calibration surface computed from our own
+resolved-market history (`pmfade.backfill` + `pmfade.market_calib`), anchor
+families in `pmfade/families/*.json` (operator overrides in
+`anchors_manual.json`), a rules-hardness scorer, and per-scan structural
+screens (date-ladder monotonicity, negRisk over-sum). Every evaluated
+candidate lands in `edge_candidates` — the backtest substrate.
 
 `settlement_lag` replaces the old `stale_extreme` whose `edge_pts = 100 − price`
 treated distance-to-boundary as edge (it's risk); the time filter also excludes
@@ -86,6 +95,13 @@ python run_portfolio.py run --dry-run   # one cycle, no Telegram
 python run_portfolio.py stats           # what's in the store
 python -m pmfade.status                 # health + per-strategy signal dashboard
 python -m pmfade.calibrate              # edge report (needs resolved signals)
+
+# Edge Engine v2 (see pmfade/HANDOFF_polymarket_edge_v2.md)
+python -m pmfade.backfill               # seed resolved-market history (overnight, once)
+python -m pmfade.backfill --status      # substrate counts
+python -m pmfade.market_calib --report  # the market's own calibration surface
+python -m pmfade.candidates             # latest edge_v2 ranked evaluation table
+python tools/replay_fades.py            # Module-E gates vs the old alert CSV (local)
 ```
 
 ## Calibration workflow

@@ -167,6 +167,33 @@ def section_by_strategy(days=None):
                                         else f"{D}none resolved yet{X}"))
 
 
+def section_edge_v2():
+    """v2 machinery counters — silently absent on pre-migration snapshots."""
+    try:
+        with store.connect() as c:
+            hist_n = c.execute("SELECT COUNT(*) FROM hist_markets").fetchone()[0]
+            cand_n = c.execute("SELECT COUNT(*) FROM edge_candidates").fetchone()[0]
+            cand_emit = c.execute("SELECT COUNT(*) FROM edge_candidates WHERE emitted=1").fetchone()[0]
+            screens = c.execute("SELECT kind, COUNT(*) n FROM structure_alerts "
+                                "GROUP BY kind").fetchall()
+            calib = c.execute("SELECT MAX(computed_at) FROM market_calibration").fetchone()[0]
+        fades = store.pending_fade_counts()
+    except sqlite3.OperationalError:
+        return
+    if not any([hist_n, cand_n, fades, calib]):
+        return
+    print(f"\n{B}EDGE v2{X}")
+    print(f"  calibration substrate   {hist_n:,} resolved markets"
+          + (f" · surface computed {_ago(calib)}" if calib else " · surface not computed"))
+    print(f"  edge candidates         {cand_n:,} evaluated · {cand_emit:,} emitted")
+    if screens:
+        print("  structure screens       "
+              + " · ".join(f"{r['kind']} {r['n']}" for r in screens))
+    if fades:
+        print("  pending fades           "
+              + " · ".join(f"{k} {v}" for k, v in sorted(fades.items())))
+
+
 def section_recent(n=15):
     with store.connect() as c:
         rows = c.execute("SELECT ts, strategy_id, side, entry_price, score, question "
@@ -190,6 +217,7 @@ def main():
 
     try:
         section_health()
+        section_edge_v2()
         section_by_strategy(days=args.days)
         section_recent(args.recent)
     except sqlite3.OperationalError as e:
