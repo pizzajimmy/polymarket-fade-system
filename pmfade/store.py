@@ -531,6 +531,37 @@ def insert_structure_alert(kind: str, event_slug: str, detail: str) -> None:
                   (now_iso(), kind, event_slug, detail))
 
 
+# ── Pending fades (Module E state machine) ─────────────────────────────────────
+
+def get_pending_fade(condition_id: str) -> Optional[sqlite3.Row]:
+    with connect() as c:
+        return c.execute("""SELECT * FROM pending_fades
+                            WHERE condition_id=? AND status='pending'
+                            ORDER BY id DESC LIMIT 1""", (condition_id,)).fetchone()
+
+
+def insert_pending_fade(condition_id: str, direction: str, ref_price: float,
+                        fv_at_detect: Optional[float]) -> None:
+    with connect() as c:
+        c.execute("""INSERT INTO pending_fades
+                     (condition_id, direction, detected_at, ref_price, fv_at_detect)
+                     VALUES (?, ?, ?, ?, ?)""",
+                  (condition_id, direction, now_iso(), ref_price, fv_at_detect))
+
+
+def decide_pending_fade(fade_id: int, status: str, reason: str = "") -> None:
+    with connect() as c:
+        c.execute("""UPDATE pending_fades SET status=?, reason=?, decided_at=?
+                     WHERE id=?""", (status, reason, now_iso(), fade_id))
+
+
+def pending_fade_counts() -> dict:
+    with connect() as c:
+        rows = c.execute("SELECT status, COUNT(*) n FROM pending_fades "
+                         "GROUP BY status").fetchall()
+    return {r["status"]: r["n"] for r in rows}
+
+
 # ── Scan runs (observability) ──────────────────────────────────────────────────
 
 def start_run() -> int:

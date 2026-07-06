@@ -7,6 +7,7 @@ from .strategies.settlement_lag import SettlementLag
 from .strategies.longshot_bias import LongshotBias
 from .strategies.correlated_lag import CorrelatedLag
 from .strategies.edge_v2 import EdgeV2
+from .strategies.news_fade_v2 import NewsFadeV2
 
 
 def build_portfolio():
@@ -18,5 +19,6 @@ def build_portfolio():
         CorrelatedLag(),
         # v2 — additive, not a replacement
         EdgeV2(),
+        NewsFadeV2(),
     ]
     return [s for s in strategies if s.enabled]

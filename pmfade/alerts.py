@@ -6,6 +6,7 @@ Both are best-effort and never raise into the scan loop.
 from __future__ import annotations
 
 import os
+import json
 import logging
 import requests
 
@@ -41,10 +42,21 @@ def format_signal(row) -> str:
     emoji = _EMOJI.get(row["strategy_id"], "•")
     q = row["question"][:90] + ("…" if len(row["question"] or "") > 90 else "")
     url_tag = f'\n<a href="{row["url"]}">Open on Polymarket</a>' if row["url"] else ""
+
+    # Module E: operator-confirm block (the human is the input-change classifier)
+    extra = ""
+    try:
+        feats = json.loads(row["features"] or "{}")
+        if feats.get("operator_check"):
+            extra = f"\n\n{feats['operator_check']}"
+    except Exception:
+        pass
+
     return (
         f"{emoji} <b>{row['strategy_id']}</b>  ·  score {row['score']:.0f}\n"
         f"<i>{q}</i>\n\n"
         f"Buy <b>{row['side']}</b> @ ~{row['entry_price']:.1f}¢"
+        f"{extra}"
         f"{url_tag}"
     )
 

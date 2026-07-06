@@ -67,6 +67,27 @@ def _walk_book_usd(levels: list, clip_usd: float, side_no: bool) -> tuple[float 
     return vwap, depth_usd
 
 
+def compute_fv(mv: MarketView):
+    """Shared fair-value blend (edge_v2 + news_fade_v2 use the same machinery).
+    Returns (fv_cents, meta dict) or (None, meta) when no basis exists."""
+    d = mv.days_to_resolution
+    a = anchors.evaluate(mv.condition_id, mv.slug, mv.question, d, mv.end_date)
+    prior_c, prior_q = market_calib.calibration_prior(mv.yes_price, mv.category, d)
+    if a is None and prior_c is None:
+        return None, {"anchor": None, "prior": None, "prior_quality": prior_q,
+                      "blend_w": 0.0, "anchor_res": None, "basis": "none"}
+    if a is not None:
+        w = C.BLEND_W.get(a.tier, 0.4)
+        anchor_c = a.prob * 100
+        fv = w * anchor_c + (1 - w) * (prior_c if prior_c is not None else mv.yes_price)
+        basis = "anchor"
+    else:
+        w, anchor_c, fv = 0.0, None, prior_c
+        basis = "prior"
+    return fv, {"anchor": anchor_c, "prior": prior_c, "prior_quality": prior_q,
+                "blend_w": w, "anchor_res": a, "basis": basis}
+
+
 class EdgeV2(Strategy):
     id = "edge_v2"
     cooldown_hours = C.EV2_COOLDOWN_HRS
@@ -84,16 +105,12 @@ class EdgeV2(Strategy):
             return None
 
         # ── fair value ─────────────────────────────────────────────────────────
-        a = anchors.evaluate(mv.condition_id, mv.slug, mv.question, d, mv.end_date)
-        prior_c, prior_q = market_calib.calibration_prior(mv.yes_price, mv.category, d)
-        if a is None and prior_c is None:
+        fv, meta = compute_fv(mv)
+        if fv is None:
             return None                                    # no FV basis
-        if a is not None:
-            w = C.BLEND_W.get(a.tier, 0.4)
-            anchor_c = a.prob * 100
-            fv = w * anchor_c + (1 - w) * (prior_c if prior_c is not None else mv.yes_price)
-        else:
-            w, anchor_c, fv = 0.0, None, prior_c
+        a = meta["anchor_res"]
+        w, anchor_c, prior_c, prior_q = (meta["blend_w"], meta["anchor"],
+                                         meta["prior"], meta["prior_quality"])
 
         # ── direction: fade the overpriced longshot only ───────────────────────
         cheap_is_yes = mv.yes_price <= mv.no_price
