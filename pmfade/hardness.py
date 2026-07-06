@@ -21,37 +21,42 @@ import re
 import json
 from functools import lru_cache
 
-BASE = 50.0
+# Calibrated against LIVE Polymarket rules text (2026-07): "a consensus of
+# credible reporting" is PM's standard FALLBACK clause and appears in nearly
+# every description — with the original -25/-12 weights the scorer was a
+# kill-switch (an NFL-championship market scored 26). Weights below make it a
+# discriminator: reporting-as-primary-source stays penalized, reporting-as-
+# fallback-behind-an-official-source is halved (see score()).
+BASE = 55.0
 
 # (name, compiled regex, points). Penalties negative, rewards positive.
 _RULES: list[tuple[str, re.Pattern, float]] = [
     # ── penalties: interpretation surface ─────────────────────────────────────
-    ("consensus_of_reporting",
-     re.compile(r"consensus of credible reporting", re.I), -25),
-    ("credible_reporting",
-     re.compile(r"credible (?:media |news )?report", re.I), -12),
+    ("reporting_based",
+     re.compile(r"(consensus of credible reporting|credible (?:media |news )?report)", re.I), -8),
     ("qualitative_noun",
-     re.compile(r"\b(major|significant|substantial|serious|notable|widely)\b", re.I), -6),
+     re.compile(r"\b(major|significant|substantial|serious|notable|widely)\b", re.I), -3),
     ("intent_interpretation",
-     re.compile(r"\b(intend(?:s|ed)?|intention|seek(?:s|ing)? to|attempt(?:s|ed)? to)\b", re.I), -10),
+     re.compile(r"\b(intend(?:s|ed)?|intention|seek(?:s|ing)? to|attempt(?:s|ed)? to)\b", re.I), -8),
     ("vague_event_noun",
-     re.compile(r"\b(official visit|meeting between|suit against|talks?\b)", re.I), -8),
+     re.compile(r"\b(official visit|meeting between|suit against|talks?\b)", re.I), -5),
     ("discretion",
-     re.compile(r"(sole discretion|may be resolved|reserves? the right)", re.I), -10),
+     re.compile(r"(sole discretion|may be resolved|reserves? the right)", re.I), -8),
     ("compound_conditions",
-     re.compile(r"\b(?:and|or)\b.*\b(?:and|or)\b.*\b(?:and|or)\b", re.I | re.S), -8),
+     re.compile(r"\b(?:and|or)\b.*\b(?:and|or)\b.*\b(?:and|or)\b", re.I | re.S), -4),
     # ── rewards: objective anchors ─────────────────────────────────────────────
     ("named_official_source",
      re.compile(r"(official (?:website|publication|data|figures|report)|roll[- ]call|"
-                r"federal register|\.gov\b|government publication|according to the "
-                r"(?:[A-Z][\w]+ ){0,3}(?:website|filing|report|data))", re.I), +10),
+                r"federal register|\.gov\b|government publication|"
+                r"official information from|according to the "
+                r"(?:[A-Z][\w]+ ){0,3}(?:website|filing|report|data))", re.I), +15),
     ("explicit_deadline",
      re.compile(r"(\d{1,2}:\d{2}\s*(?:am|pm)?\s*(?:ET|EST|EDT|PT|UTC|GMT)|11:59)", re.I), +8),
     ("edge_case_handling",
      re.compile(r"(for the avoidance of doubt|in the event (?:that|of)|"
                 r"otherwise (?:this market )?(?:will )?resolves?|resolve 50[/-]50)", re.I), +6),
     ("explicit_resolver",
-     re.compile(r"(resolution source|will resolve according to|resolver?:)", re.I), +6),
+     re.compile(r"(resolution source|will resolve according to|resolver?:)", re.I), +10),
 ]
 
 
@@ -64,13 +69,20 @@ def score(description: str) -> tuple[float, str]:
         return 40.0, json.dumps(["no_rules_text"])
     s = BASE
     fired: list[str] = []
+    hits_by = {}
     for name, rx, pts in _RULES:
         hits = len(rx.findall(description))
+        hits_by[name] = hits
         if hits:
             # first hit full weight, repeats at half — a rule firing five times
             # shouldn't nuke/turbo the score linearly
             s += pts * (1 + 0.5 * (min(hits, 3) - 1))
             fired.append(name)
+    # reporting-language behind a named official source is PM's fallback
+    # boilerplate, not the primary resolution path — halve that penalty back
+    if hits_by.get("reporting_based") and hits_by.get("named_official_source"):
+        s += 4
+        fired.append("reporting_is_fallback")
     # long, structured rules text is itself weak evidence of care
     if len(description) > 600:
         s += 4

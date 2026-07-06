@@ -37,7 +37,8 @@ def main():
     print("─" * 130)
     for r in rows:
         gates = json.loads(r["gates_passed"] or "{}")
-        failed = ",".join(k for k, v in gates.items() if v is False) or "-"
+        failed = ",".join(k for k, v in gates.items()
+                          if v is False and k != "book_walked") or "-"
         print(f"{'  ✓' if r['emitted'] else '  ·':<5}"
               f"{r['side'] or '?':<5}"
               f"{r['market_price']:>5.0f}{r['fv']:>7.1f}"

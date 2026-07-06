@@ -154,18 +154,23 @@ def run_structure_screens(views: list[MarketView], dry_run: bool) -> int:
 
         # negRisk: mutually-exclusive outcomes should sum to ~1. Legs priced
         # <1¢ are filtered upstream, which only LOWERS the sum — so alert on
-        # over-sum only (that's the actionable sell-the-book shape anyway).
+        # over-sum only. Two sanity bounds (live probe 2026-07): count only
+        # legs with a real book (liquidity + quotes) — dead legs sit at stale
+        # midpoints; and sums far above 1 (we saw 6.26 across 15 legs) are
+        # price-data artifacts, not arbs — a real overround is a few percent.
         if any(v.neg_risk for v in vs) and len(vs) >= 3:
-            total = sum(v.yes_price for v in vs) / 100.0
-            if total >= 1.06 and not store.structure_alert_recent("NEGRISK", slug):
-                detail = f"sum(YES)={total:.2f} across {len(vs)} visible legs"
-                store.insert_structure_alert("NEGRISK", slug, detail)
-                fired += 1
-                if not dry_run:
-                    alerts.send_telegram(
-                        f"🧮 <b>NegRisk over-sum</b>\n<i>{vs[0].question[:70]}…</i>\n"
-                        f"{detail}\nhttps://polymarket.com/event/{slug}")
-                log.info("[screen] NEGRISK %s: %s", slug[:40], detail)
+            live = [v for v in vs if v.liquidity >= 500 and v.best_bid is not None]
+            if len(live) >= 3:
+                total = sum(v.yes_price for v in live) / 100.0
+                if 1.06 <= total <= 1.60 and not store.structure_alert_recent("NEGRISK", slug):
+                    detail = f"sum(YES)={total:.2f} across {len(live)} live legs"
+                    store.insert_structure_alert("NEGRISK", slug, detail)
+                    fired += 1
+                    if not dry_run:
+                        alerts.send_telegram(
+                            f"🧮 <b>NegRisk over-sum</b>\n<i>{live[0].question[:70]}…</i>\n"
+                            f"{detail}\nhttps://polymarket.com/event/{slug}")
+                    log.info("[screen] NEGRISK %s: %s", slug[:40], detail)
 
         # date-ladder monotonicity within one anchor family:
         # P(by earlier date) must be <= P(by later date) (+tolerance)

@@ -31,7 +31,7 @@ log = logging.getLogger("pmfade.markets")
 FIXTURE_KEYWORDS = [
     " vs ", " vs. ", "o/u ", "over/under", "spread:", "moneyline",
     "both teams to score", "first half", "map 1", "map 2", "map 3",
-    "odd/even", "correct score", "next goal", "anytime goalscorer",
+    "odd/even", "correct score", "exact score", "next goal", "anytime goalscorer",
     "to score", "bo3", "bo5", "set winner", "game winner", "anytime",
     "total corners", "total kills", "shots on target", "to win the match",
 ]
