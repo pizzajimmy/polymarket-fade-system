@@ -35,6 +35,7 @@ from datetime import datetime, timezone
 
 from .base import Strategy, Signal, MarketView, Context
 from .. import config as C
+from .. import alerts
 from .edge_v2 import compute_fv
 
 log = logging.getLogger("pmfade.news_fade_v2")
@@ -123,20 +124,52 @@ class NewsFadeV2(Strategy):
                                       f"not viable to resolution ({ev_to_res:+.1f}¢)")
             return None
 
+        a = meta.get("anchor_res")
+        inputs = (a.inputs if a else None)
+
+        # ── news qualification (v2.1) — only for candidates that passed both
+        # gates, so the RSS fetch + optional classifier run a few times a day
+        # at most. Everything here fails open to the operator path.
+        from .. import news, news_classify
+        headlines = news.fetch_for_market(mv.question)
+        cls = news_classify.classify(mv.question, direction, pending["ref_price"],
+                                     mv.yes_price, (a.family if a else None),
+                                     inputs, headlines)
+        if (cls and cls.input_changed
+                and cls.confidence >= C.FADE_CLASSIFIER_MIN_CONF):
+            # information, not sentiment: suppress the fade, flag a re-anchor
+            store.decide_pending_fade(
+                pending["id"], "suppressed",
+                f"input_changed:{cls.which_input} ({cls.confidence:.2f})")
+            store.insert_structure_alert(
+                "REANCHOR", mv.event_slug or mv.slug,
+                f"{mv.question[:80]} — {cls.rationale}")
+            alerts.send_telegram(
+                f"🧷 <b>Re-anchor needed</b> (fade suppressed — input changed)\n"
+                f"<i>{mv.question[:80]}</i>\n"
+                f"{cls.which_input}: {cls.rationale}\n"
+                f"Update anchors_manual.json for this market.")
+            log.info("  [suppressed by classifier] %s: %s",
+                     mv.question[:40], cls.which_input)
+            return None
+
         store.decide_pending_fade(pending["id"], "promoted", f"dev {deviation:.1f}")
 
         # anchor/prior-based FV alerts (floor 80); fallback-basis stays silent-but-logged
         floor = 80 if basis in ("anchor", "prior") else 70
         score = min(95.0, floor + (deviation - C.FADE_MIN_DEVIATION_PTS))
 
-        a = meta.get("anchor_res")
-        inputs = (a.inputs if a else None)
         check_lines = ["Operator check — fade ONLY if none of these changed:"]
         if a:
             check_lines += [f"• {k} = {v}" for k, v in (inputs or {}).items()]
             check_lines.append(f"({a.family}: {a.note})")
         else:
             check_lines.append("• no anchor family matched — judge the news yourself")
+        check_lines.append("")
+        check_lines.append(news.headlines_block(headlines))
+        if cls:
+            check_lines.append(f"Classifier: no structural change detected "
+                               f"(conf {cls.confidence:.2f}) — {cls.rationale}")
         features = {
             "direction": direction, "detected_at": pending["detected_at"],
             "ref_price": pending["ref_price"], "cooldown_min": round(age_min),
@@ -144,7 +177,11 @@ class NewsFadeV2(Strategy):
             "deviation": round(deviation, 1), "ev_to_resolution": round(ev_to_res, 1),
             "family": (a.family if a else None), "anchor_inputs": inputs,
             "operator_check": "\n".join(check_lines),
-            "news_context": None,      # seam for a future feed
+            "headlines_n": len(headlines),
+            "classifier": (None if cls is None else
+                           {"input_changed": cls.input_changed,
+                            "confidence": cls.confidence,
+                            "rationale": cls.rationale}),
         }
         rationale = (f"{direction} cooled {age_min:.0f}min, {deviation:.0f}pts off "
                      f"FV {fv:.0f}¢ [{basis}] → buy {side} @ {entry:.1f}¢")

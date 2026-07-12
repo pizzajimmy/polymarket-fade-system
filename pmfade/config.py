@@ -101,5 +101,18 @@ FADE_COOLDOWN_MIN       = _f("FADE_COOLDOWN_MIN", 45)
 FADE_MIN_DEVIATION_PTS  = _f("FADE_MIN_DEVIATION_PTS", 15)
 FADE_PENDING_EXPIRE_HRS = _f("FADE_PENDING_EXPIRE_HRS", 6)
 
+# ── News qualification (Module E v2.1) ─────────────────────────────────────────
+NEWS_FEED             = os.environ.get("NEWS_FEED", "google_rss")   # google_rss | none
+NEWS_MAX_HEADLINES    = _i("NEWS_MAX_HEADLINES", 6)
+NEWS_WINDOW_HRS       = _f("NEWS_WINDOW_HRS", 48)
+# classifier runs only when ANTHROPIC_API_KEY is set; fails open to operator mode
+NEWS_CLASSIFIER_MODEL = os.environ.get("NEWS_CLASSIFIER_MODEL", "claude-haiku-4-5-20251001")
+FADE_CLASSIFIER_MIN_CONF = _f("FADE_CLASSIFIER_MIN_CONF", 0.7)
+
+# ── Strategy toggles (calibration verdicts get applied here) ───────────────────
+# e.g. STRATEGIES_DISABLED="correlated_lag" in .env
+STRATEGIES_DISABLED = {s.strip() for s in
+                       os.environ.get("STRATEGIES_DISABLED", "").split(",") if s.strip()}
+
 # ── Retention ──────────────────────────────────────────────────────────────────
 CANDIDATES_RETAIN_DAYS = _i("CANDIDATES_RETAIN_DAYS", 180)

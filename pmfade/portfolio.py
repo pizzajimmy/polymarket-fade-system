@@ -21,4 +21,6 @@ def build_portfolio():
         EdgeV2(),
         NewsFadeV2(),
     ]
-    return [s for s in strategies if s.enabled]
+    from . import config as C
+    return [s for s in strategies
+            if s.enabled and s.id not in C.STRATEGIES_DISABLED]
