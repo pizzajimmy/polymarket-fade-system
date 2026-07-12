@@ -157,7 +157,18 @@ class NewsFadeV2(Strategy):
 
         # anchor/prior-based FV alerts (floor 80); fallback-basis stays silent-but-logged
         floor = 80 if basis in ("anchor", "prior") else 70
-        score = min(95.0, floor + (deviation - C.FADE_MIN_DEVIATION_PTS))
+        score = floor + (deviation - C.FADE_MIN_DEVIATION_PTS)
+
+        # ── classifier verdict weighted into the score ─────────────────────────
+        # "no structural change" earns up to +10 with confidence; a SUSPECTED
+        # change (below the auto-suppress floor) costs -15, typically dropping
+        # the signal under the 80-alert line: logged, silent, extra caution.
+        if cls is not None:
+            if cls.input_changed:
+                score -= 15
+            else:
+                score += max(0.0, min(10.0, 20 * (cls.confidence - 0.5)))
+        score = max(20.0, min(95.0, score))
 
         check_lines = ["Operator check — fade ONLY if none of these changed:"]
         if a:
@@ -168,8 +179,15 @@ class NewsFadeV2(Strategy):
         check_lines.append("")
         check_lines.append(news.headlines_block(headlines))
         if cls:
-            check_lines.append(f"Classifier: no structural change detected "
-                               f"(conf {cls.confidence:.2f}) — {cls.rationale}")
+            if cls.input_changed:
+                check_lines.append(f"⚠ Classifier SUSPECTS an input change "
+                                   f"(conf {cls.confidence:.2f}, below auto-suppress) "
+                                   f"— {cls.rationale}. Score penalized −15.")
+            else:
+                check_lines.append(f"Classifier: no structural change detected "
+                                   f"(conf {cls.confidence:.2f}, score +"
+                                   f"{max(0.0, min(10.0, 20*(cls.confidence-0.5))):.0f}) "
+                                   f"— {cls.rationale}")
         features = {
             "direction": direction, "detected_at": pending["detected_at"],
             "ref_price": pending["ref_price"], "cooldown_min": round(age_min),

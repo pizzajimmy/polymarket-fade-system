@@ -188,6 +188,44 @@ def _fmt_bands(bands):
               f"{s['mean_ret_pts']:>+8.1f}{ci:>18}{cap:>7}{flag}")
 
 
+def _delayed_entry(sigs, tracks, resolved, cost, strategy_id="news_fade"):
+    """Replicability check for a human operator (NZT, asleep when alerts fire):
+    recompute resolution returns as if the fill happened at the +6h track
+    price instead of the alert-minute price. If the band edge survives the
+    delay, it's manually harvestable; if it evaporates, it lives in the first
+    minutes only."""
+    rows = []
+    for s in sigs:
+        if s["strategy_id"] != strategy_id:
+            continue
+        tr = tracks.get(s["signal_id"], {})
+        res = tr.get("resolution", resolved.get(s["condition_id"]))
+        p6 = tr.get("6h")
+        if res is None or p6 is None:
+            continue
+        entry6 = p6 if s["side"] == "YES" else 100 - p6
+        rows.append((int((s["score"] or 0) // 10) * 10,
+                     position_return(s["side"], s["entry_price"], res) - cost,
+                     position_return(s["side"], entry6, res) - cost))
+    if not rows:
+        return
+    print(f"\n▸ {strategy_id} — delayed-entry check (fill at +6h vs at alert, "
+          f"net of cost, resolution)")
+    print(f"    {'band':<8}{'n':>4}{'at alert':>10}{'at +6h':>9}{'decay':>8}")
+    bands: dict[int, list] = {}
+    for b, r0, r6 in rows:
+        bands.setdefault(b, []).append((r0, r6))
+    tot = [(r0, r6) for v in bands.values() for r0, r6 in v]
+    for b in sorted(bands):
+        v = bands[b]
+        m0, m6 = st.mean(x for x, _ in v), st.mean(x for _, x in v)
+        print(f"    {b}-{b+9:<4}{len(v):>4}{m0:>+10.1f}{m6:>+9.1f}{m6-m0:>+8.1f}")
+    m0, m6 = st.mean(x for x, _ in tot), st.mean(x for _, x in tot)
+    print(f"    {'all':<8}{len(tot):>4}{m0:>+10.1f}{m6:>+9.1f}{m6-m0:>+8.1f}")
+    print("    (decay ≈ what the first 6h of reversion cost you — the manually "
+          "unharvestable part)")
+
+
 def _anchor_calibration(sigs, tracks, resolved):
     """Are our FAIR VALUES themselves calibrated? (handoff §8 monitor, signal-
     only remnant of Module G.) For each resolved v2 signal, compare the
@@ -274,6 +312,8 @@ def report(cost: float = 2.0):
             print("    by score band (resolution, net of cost):")
             _fmt_bands(d["bands"])
 
+    _delayed_entry(sigs, tracks, resolved, cost, "news_fade")
+    _delayed_entry(sigs, tracks, resolved, cost, "news_fade_v2")
     _anchor_calibration(sigs, tracks, resolved)
     _v1_v2_overlap(sigs, tracks, resolved, cost)
 
