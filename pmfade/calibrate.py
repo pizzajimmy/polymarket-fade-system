@@ -226,6 +226,55 @@ def _delayed_entry(sigs, tracks, resolved, cost, strategy_id="news_fade"):
           "unharvestable part)")
 
 
+def _exit_horizon_comparison(sigs, tracks, resolved, cost, strategy_id="news_fade"):
+    """Answer 'should we sell into the reversion instead of holding to
+    resolution?' cleanly: for the SAME resolved-signal set, compare exiting at
+    each horizon vs holding to expiry. (The main horizon table can't answer
+    this — its rows cover different signal subsets.) Early exits pay the same
+    round-trip cost. ¢/day = mean net / mean holding days — the capital-
+    velocity view: a smaller edge captured quickly can still beat a bigger
+    one that locks capital."""
+    subset = []
+    for s in sigs:
+        if s["strategy_id"] != strategy_id:
+            continue
+        tr = tracks.get(s["signal_id"], {})
+        res = tr.get("resolution", resolved.get(s["condition_id"]))
+        if res is None:
+            continue
+        subset.append((s, tr, res))
+    if len(subset) < 5:
+        return
+    print(f"\n▸ {strategy_id} — exit-horizon comparison (same {len(subset)} "
+          f"resolved signals, net of cost)")
+    print(f"    {'exit at':<12}{'n':>4}{'win%':>7}{'mean¢':>8}{'~¢/day':>8}")
+    horizons = [("6h", 0.25), ("24h", 1.0), ("72h", 3.0), ("7d", 7.0)]
+    for label, days in horizons:
+        rs = [position_return(s["side"], s["entry_price"], tr[label]) - cost
+              for s, tr, _ in subset if tr.get(label) is not None]
+        if not rs:
+            continue
+        win = 100 * sum(1 for x in rs if x > 0) / len(rs)
+        print(f"    {label:<12}{len(rs):>4}{win:>6.0f}%{st.mean(rs):>+8.1f}"
+              f"{st.mean(rs)/days:>+8.2f}")
+    # holding days for the resolution leg: signal ts -> last track timestamp
+    res_rs, hold_days = [], []
+    for s, tr, res in subset:
+        res_rs.append(position_return(s["side"], s["entry_price"], res) - cost)
+        t0 = store.parse_iso(s["ts"])
+        with store.connect() as c:
+            t1r = c.execute("SELECT MAX(ts) m FROM signal_tracks WHERE signal_id=?",
+                            (s["signal_id"],)).fetchone()["m"]
+        t1 = store.parse_iso(t1r) if t1r else None
+        if t0 and t1 and t1 > t0:
+            hold_days.append((t1 - t0).total_seconds() / 86400)
+    mean_hold = st.mean(hold_days) if hold_days else None
+    win = 100 * sum(1 for x in res_rs if x > 0) / len(res_rs)
+    per_day = (st.mean(res_rs) / mean_hold) if mean_hold else None
+    print(f"    {'resolution':<12}{len(res_rs):>4}{win:>6.0f}%{st.mean(res_rs):>+8.1f}"
+          + (f"{per_day:>+8.2f}  (~{mean_hold:.0f}d avg hold)" if per_day is not None else ""))
+
+
 def _anchor_calibration(sigs, tracks, resolved):
     """Are our FAIR VALUES themselves calibrated? (handoff §8 monitor, signal-
     only remnant of Module G.) For each resolved v2 signal, compare the
@@ -314,6 +363,8 @@ def report(cost: float = 2.0):
 
     _delayed_entry(sigs, tracks, resolved, cost, "news_fade")
     _delayed_entry(sigs, tracks, resolved, cost, "news_fade_v2")
+    _exit_horizon_comparison(sigs, tracks, resolved, cost, "news_fade")
+    _exit_horizon_comparison(sigs, tracks, resolved, cost, "news_fade_v2")
     _anchor_calibration(sigs, tracks, resolved)
     _v1_v2_overlap(sigs, tracks, resolved, cost)
 
