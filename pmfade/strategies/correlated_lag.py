@@ -51,6 +51,11 @@ def _triggers(ctx: Context):
 
 class CorrelatedLag(Strategy):
     id = "correlated_lag"
+    # RETIRED by calibration 2026-07: -1.9c/trade, 95% CI [-2.8, -1.0] entirely
+    # negative at n=1,267 resolved — the same-direction-correlation assumption
+    # does not pay. Tracking of already-emitted signals continues; re-enable
+    # only with a redesigned correlation model.
+    enabled = False
     cooldown_hours = C.CL_COOLDOWN_HRS
 
     def evaluate(self, mv: MarketView, ctx: Context):
