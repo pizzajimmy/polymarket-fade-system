@@ -1,0 +1,11 @@
+{
+  "family": "poisson_recurrence",
+  "priority": 5,
+  "tier": 2,
+  "anchor_fn": "poisson_recurrence",
+  "match": {
+    "any": ["\\bearthquakes?\\b", "\\bquake\\b"],
+    "none": []
+  },
+  "params": {}
+}

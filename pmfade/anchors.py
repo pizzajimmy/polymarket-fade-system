@@ -281,6 +281,80 @@ def _leader_out(params, days, end_date, question, ov):
     return p, inputs, f"sum of components ({age}y, {days}d window)", 2
 
 
+# Global earthquake rates per year at/above magnitude M (USGS long-term
+# averages, Gutenberg–Richter ~10x per magnitude unit). Log-linear
+# interpolation between anchors; operator-overridable via params/manual.
+_EQ_RATES = {6.0: 134.0, 6.5: 45.0, 7.0: 15.0, 7.5: 5.0,
+             8.0: 1.0, 8.5: 0.3, 9.0: 0.05}
+
+
+def _eq_rate(mag: float) -> float:
+    import math
+    ks = sorted(_EQ_RATES)
+    if mag <= ks[0]:
+        return _EQ_RATES[ks[0]]
+    if mag >= ks[-1]:
+        return _EQ_RATES[ks[-1]]
+    lo = max(k for k in ks if k <= mag)
+    hi = min(k for k in ks if k >= mag)
+    if lo == hi:
+        return _EQ_RATES[lo]
+    t = (mag - lo) / (hi - lo)
+    return 10 ** (math.log10(_EQ_RATES[lo])
+                  + t * (math.log10(_EQ_RATES[hi]) - math.log10(_EQ_RATES[lo])))
+
+
+@anchor_fn("poisson_recurrence")
+def _poisson_recurrence(params, days, end_date, question, ov):
+    # Recurring natural events with stable historical rates — market-implied
+    # vs base rate is the whole trade. P(>=1 in window) = 1 - exp(-lambda*t);
+    # "exactly k" markets use the Poisson pmf. CAVEAT encoded as an input:
+    # right after a mainshock, short-window rates exceed the background rate
+    # (aftershock clustering) — the anchor UNDERESTIMATES P(yes) there;
+    # override rate_annual in anchors_manual.json when a market is
+    # clustering-adjacent.
+    import re as _re
+    import math
+    q = question.lower()
+    if "earthquake" not in q and "quake" not in q:
+        return None
+
+    band = _re.search(r"(\d(?:\.\d)?)\s*(?:and|to|-)\s*(\d(?:\.\d)?)", q)
+    mm = (_re.search(r"magnitude\s+(?:of\s+)?(\d(?:\.\d)?)", q)
+          or _re.search(r"\bm\s?(\d(?:\.\d)?)\b", q)
+          or _re.search(r">\s*(\d(?:\.\d)?)", q))
+    lam = None
+    label = ""
+    if band:
+        lo_m, hi_m = float(band.group(1)), float(band.group(2))
+        if 4.0 <= lo_m < hi_m <= 9.9:
+            lam = max(0.01, _eq_rate(lo_m) - _eq_rate(hi_m))
+            label = f"M{lo_m}-{hi_m}"
+    if lam is None and mm:
+        m = float(mm.group(1))
+        if 4.0 <= m <= 9.5:
+            lam = _eq_rate(m)
+            label = f"M{m}+"
+    if lam is None:
+        return None
+    lam = ov.get("rate_annual", params.get("rate_annual", lam))
+
+    t = max(days, 1) / 365.0
+    lt = lam * t
+    exact = _re.search(r"exactly\s+(\d+)", q)
+    if exact:
+        k = int(exact.group(1))
+        p = math.exp(-lt) * lt ** k / math.factorial(k)
+        mode = f"P(K={k})"
+    else:
+        p = 1 - math.exp(-lt)
+        mode = "P(>=1)"
+    inputs = {"event": label, "rate_annual": round(lam, 2), "window_days": days,
+              "mode": mode,
+              "clustering_caveat": "post-mainshock windows exceed background rate"}
+    return p, inputs, f"{label} at {lam:.1f}/yr over {days}d -> {mode}={p:.1%}", 2
+
+
 @anchor_fn("legal_outcome_by_date")
 def _legal(params, days, end_date, question, ov):
     # P(remaining process chain completes inside window). Tier-3 template —
@@ -326,8 +400,10 @@ def evaluate(condition_id: str, slug: str, question: str,
                   fam["family"], fam.get("anchor_fn"))
         return None
     try:
-        prob, inputs, note, tier = fn(fam.get("params", {}), days, end_date,
-                                      question, ov or {})
+        out = fn(fam.get("params", {}), days, end_date, question, ov or {})
+        if out is None:            # family matched but inputs unparseable — no anchor
+            return None
+        prob, inputs, note, tier = out
     except Exception as e:
         log.error("Anchor %s failed on %s: %s", fam["family"], question[:50], e)
         return None
