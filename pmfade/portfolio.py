@@ -8,6 +8,7 @@ from .strategies.longshot_bias import LongshotBias
 from .strategies.correlated_lag import CorrelatedLag
 from .strategies.edge_v2 import EdgeV2
 from .strategies.news_fade_v2 import NewsFadeV2
+from .strategies.rate_anchor import RateAnchor
 
 
 def build_portfolio():
@@ -20,6 +21,8 @@ def build_portfolio():
         # v2 — additive, not a replacement
         EdgeV2(),
         NewsFadeV2(),
+        # statistical base-rate book (own records; edge_v2 excludes these markets)
+        RateAnchor(),
     ]
     from . import config as C
     return [s for s in strategies

@@ -284,6 +284,9 @@ def init_db() -> None:
             "best_bid": "REAL",
             "best_ask": "REAL",
         })
+        _ensure_columns(c, "edge_candidates", {
+            "strategy_id": "TEXT DEFAULT 'edge_v2'",
+        })
     log.info("Store ready: %s", DB_PATH.resolve())
 
 
@@ -489,11 +492,12 @@ def mark_notified(signal_id: str) -> None:
 _CANDIDATE_COLS = ["ts", "condition_id", "question", "side", "market_price", "fv",
                    "anchor", "prior", "blend_w", "family", "tier", "edge_gross",
                    "fee_cost", "spread_cost", "edge_net", "edge_net_annualized",
-                   "hardness", "gates_passed", "emitted"]
+                   "hardness", "gates_passed", "emitted", "strategy_id"]
 
 
 def insert_edge_candidate(row: dict) -> None:
     row = {**{c: None for c in _CANDIDATE_COLS}, **row, "ts": row.get("ts") or now_iso()}
+    row["strategy_id"] = row.get("strategy_id") or "edge_v2"
     with connect() as c:
         c.execute(f"""INSERT INTO edge_candidates ({', '.join(_CANDIDATE_COLS)})
                       VALUES ({', '.join(':' + c_ for c_ in _CANDIDATE_COLS)})""", row)

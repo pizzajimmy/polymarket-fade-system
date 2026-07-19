@@ -93,6 +93,11 @@ EV2_CONVERGENCE_FRACTION = _f("EV2_CONVERGENCE_FRACTION", 0.6)  # expected_hold 
 EV2_BOOK_FETCH_BUDGET = _i("EV2_BOOK_FETCH_BUDGET", 25)  # CLOB book walks per cycle
 EV2_COOLDOWN_HRS     = _f("EV2_COOLDOWN_HRS", 24)
 
+# ── rate_anchor strategy (statistical base-rate book, separate from edge_v2) ──
+RA_MIN_VOLUME = _f("RA_MIN_VOLUME", 25000)   # sleepy markets are the point
+RA_MIN_DAYS   = _i("RA_MIN_DAYS", 7)
+RB_MIN_EDGE   = _f("RB_MIN_EDGE", 10)        # backtest: trade when |anchor-implied| >= this
+
 # ── Hardness (Module C) ────────────────────────────────────────────────────────
 HARDNESS_FLOOR       = _f("HARDNESS_FLOOR", 60)      # below -> logged, never emitted
 

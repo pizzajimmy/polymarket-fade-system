@@ -96,13 +96,13 @@ class EdgeV2(Strategy):
         d = mv.days_to_resolution
         cheap = min(mv.yes_price, mv.no_price)
 
-        # pre-gates: only markets in a tradeable shape get candidate rows.
-        # The longshot zone [3,20] exists because UNANCHORED mid-price edges are
-        # directional guesses — but a family-matched market carries a structural
-        # model, so the zone widens to [3,97] there (e.g. a Poisson-anchored
-        # earthquake market at 40c is exactly the mispricing we want to see).
-        zone_hi = 97.0 if anchors.family_name(mv.question) else C.EV2_LONGSHOT_HI
-        if not (C.EV2_LONGSHOT_LO <= cheap <= zone_hi):
+        # Rate-anchored markets (earthquakes/storms/…) belong to the rate_anchor
+        # strategy — excluded here entirely so the two books' records never mix.
+        if anchors.rate_family(mv.question):
+            return None
+
+        # pre-gates: only markets in the tradeable fade shape get candidate rows
+        if not (C.EV2_LONGSHOT_LO <= cheap <= C.EV2_LONGSHOT_HI):
             return None
         if mv.volume_total < C.EV2_MIN_VOLUME:
             return None
@@ -117,22 +117,14 @@ class EdgeV2(Strategy):
         w, anchor_c, prior_c, prior_q = (meta["blend_w"], meta["anchor"],
                                          meta["prior"], meta["prior_quality"])
 
-        # ── direction ──────────────────────────────────────────────────────────
-        # fade shape: cheap side OVERpriced -> buy the expensive side (the
-        # default, works with any FV basis). directional: cheap side UNDERpriced
-        # -> buy the cheap side, allowed ONLY on a mechanical/base-rate anchor
-        # (tier <= 2) — with a strong model the direction IS the model. The two
-        # cohorts are tagged so calibration judges them separately.
+        # ── direction: fade the overpriced cheap side only (handoff Module D).
+        # "Cheap side underpriced" is a directional call — that shape lives in
+        # the rate_anchor strategy where a base-rate model earns it.
         cheap_is_yes = mv.yes_price <= mv.no_price
         cheap_fv = fv if cheap_is_yes else 100 - fv
-        fade_shape = cheap_fv < cheap
-        directional = (not fade_shape) and a is not None and a.tier <= 2
         gates: dict[str, bool] = {}
-        gates["shape"] = fade_shape or directional
-        if directional:
-            side = "YES" if cheap_is_yes else "NO"           # buy the cheap side
-        else:
-            side = "NO" if cheap_is_yes else "YES"           # buy the expensive side
+        gates["shape"] = cheap_fv < cheap                    # cheap side overpriced
+        side = ("NO" if cheap_is_yes else "YES")             # buy the expensive side
         entry = mv.no_price if side == "NO" else mv.yes_price
         fv_side = (100 - fv) if side == "NO" else fv
         edge_gross = fv_side - entry                         # >0 when shape holds
@@ -178,13 +170,10 @@ class EdgeV2(Strategy):
         gates["hurdle"] = ann >= C.EV2_CARRY_HURDLE
         emit = all(gates.values())
 
-        # score: annualized carry scaled; prior-only capped at 65 (weaker claim);
-        # directional trades carry a -10 humility penalty vs fades
+        # score: annualized carry scaled; prior-only capped at 65 (weaker claim)
         score = max(20.0, min(95.0, 40 + 300 * ann))
         if a is None:
             score = min(score, 65.0)
-        if directional:
-            score = max(20.0, score - 10.0)
 
         ctx.store.insert_edge_candidate({
             "condition_id": mv.condition_id, "question": mv.question, "side": side,
@@ -214,7 +203,7 @@ class EdgeV2(Strategy):
             "annualized": round(ann, 3), "hardness": h,
             "days_to_res": d, "expected_hold_d": round(expected_hold, 1),
             "book_walked": book_walked,
-            "shape": "directional" if directional else "fade",
+            "shape": "fade",
         }
         rationale = (f"{mv.yes_price:.0f}¢ vs FV {fv:.1f}¢ "
                      f"[{(a.family if a else 'prior-only')}] → buy {side} @ {entry:.1f}¢, "

@@ -1,0 +1,24 @@
+{
+  "family": "storm_recurrence",
+  "priority": 6,
+  "tier": 2,
+  "rate_anchor": true,
+  "anchor_fn": "seasonal_poisson",
+  "_note": "Atlantic climatology (1991-2020 NOAA averages) — DEFAULTS TO VERIFY. Rates are annual; 'monthly' spreads the season (values sum to 1). Pacific/other basins and ENSO-year adjustments: override rate_annual per market in anchors_manual.json. Ordered specific -> generic; first match wins.",
+  "match": {
+    "any": ["\\bhurricanes?\\b", "\\btropical storms?\\b", "\\bnamed storms?\\b", "\\btyphoons?\\b", "\\bcyclones?\\b"],
+    "none": []
+  },
+  "params": {
+    "events": [
+      {"match": "cat(egory)?\\s*-?\\s*5.*(landfall|hit|strike)|landfall.*cat(egory)?\\s*-?\\s*5", "rate_annual": 0.06, "label": "Cat5 US landfall"},
+      {"match": "cat(egory)?\\s*-?\\s*5|category five", "rate_annual": 0.5, "label": "Cat5 formation"},
+      {"match": "(major hurricane|cat(egory)?\\s*-?\\s*[34]).*(landfall|hit|strike)|landfall.*(major|cat(egory)?\\s*-?\\s*[34])", "rate_annual": 0.7, "label": "major US landfall"},
+      {"match": "major hurricane|cat(egory)?\\s*-?\\s*[34]", "rate_annual": 3.2, "label": "major hurricane"},
+      {"match": "hurricanes?.*(landfall|hit|strike)|landfall.*hurricanes?", "rate_annual": 1.9, "label": "hurricane US landfall"},
+      {"match": "hurricanes?|typhoons?|cyclones?", "rate_annual": 7.2, "label": "hurricane"},
+      {"match": "named storms?|tropical storms?", "rate_annual": 14.4, "label": "named storm"}
+    ],
+    "monthly": {"5": 0.01, "6": 0.05, "7": 0.1, "8": 0.26, "9": 0.4, "10": 0.14, "11": 0.04}
+  }
+}

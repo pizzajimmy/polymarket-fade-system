@@ -89,6 +89,15 @@ def family_name(question: str) -> Optional[str]:
     return f["family"] if f else None
 
 
+@lru_cache(maxsize=16384)
+def rate_family(question: str) -> Optional[str]:
+    """Family name if the matched family is a RATE anchor (statistical base
+    rate, e.g. earthquakes/storms) — these belong to the rate_anchor strategy,
+    not edge_v2, so the two books never contaminate each other's records."""
+    f = _match(question)
+    return f["family"] if f and f.get("rate_anchor") else None
+
+
 def _match(question: str) -> Optional[dict]:
     q = question or ""
     for f in families():
@@ -353,6 +362,68 @@ def _poisson_recurrence(params, days, end_date, question, ov):
               "mode": mode,
               "clustering_caveat": "post-mainshock windows exceed background rate"}
     return p, inputs, f"{label} at {lam:.1f}/yr over {days}d -> {mode}={p:.1%}", 2
+
+
+def _season_fraction(start: date, days: int, monthly: dict) -> float:
+    """Fraction of ANNUAL event activity falling inside [start, start+days),
+    given monthly climatology weights (values sum to ~1 across 1..12)."""
+    import calendar
+    from datetime import timedelta as _td
+    f = 0.0
+    d = start
+    for _ in range(max(0, int(days))):
+        dim = calendar.monthrange(d.year, d.month)[1]
+        f += monthly.get(str(d.month), monthly.get(d.month, 0.0)) / dim
+        d += _td(days=1)
+    return f
+
+
+@anchor_fn("seasonal_poisson")
+def _seasonal_poisson(params, days, end_date, question, ov):
+    # Seasonal recurring events (hurricanes etc.): a flat annual rate is WRONG
+    # across season boundaries — a 60-day window in Aug–Sep holds ~2/3 of
+    # Atlantic activity; the same window in Dec–Jan holds ~none. Events are
+    # defined entirely in the family JSON (match regex -> annual rate), so new
+    # rate-anchored markets are an edit, not a code change. Rates are
+    # climatological DEFAULTS-TO-VERIFY; override per-market via
+    # anchors_manual.json (e.g. an active La Niña season).
+    import re as _re
+    import math
+    q = question.lower()
+    lam = None
+    label = ""
+    for ev in params.get("events", []):
+        if _re.search(ev["match"], q, _re.I):
+            lam = float(ov.get("rate_annual", ev["rate_annual"]))
+            label = ev.get("label", ev["match"][:20])
+            break
+    if lam is None:
+        return None
+    monthly = params.get("monthly")
+    start = None
+    ws = ov.get("window_start")
+    if ws:
+        try:
+            start = date.fromisoformat(ws)
+        except Exception:
+            start = None
+    if start is None:
+        start = date.today()
+    if monthly:
+        lt = lam * _season_fraction(start, days, monthly)
+    else:
+        lt = lam * max(days, 1) / 365.0
+    exact = _re.search(r"exactly\s+(\d+)", q)
+    if exact:
+        k = int(exact.group(1))
+        p = math.exp(-lt) * lt ** k / math.factorial(k)
+        mode = f"P(K={k})"
+    else:
+        p = 1 - math.exp(-lt)
+        mode = "P(>=1)"
+    inputs = {"event": label, "rate_annual": round(lam, 2), "window_days": days,
+              "seasonal": bool(monthly), "expected_events": round(lt, 3), "mode": mode}
+    return p, inputs, f"{label} {lam:.1f}/yr seasonal -> {mode}={p:.1%}", 2
 
 
 @anchor_fn("legal_outcome_by_date")
