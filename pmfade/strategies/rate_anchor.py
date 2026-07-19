@@ -52,6 +52,11 @@ class RateAnchor(Strategy):
         a = anchors.evaluate(mv.condition_id, mv.slug, mv.question, d, mv.end_date)
         if a is None:
             return None
+        # Already-occurred guard: a P(>=1) market priced very high usually means
+        # the event HAPPENED — a state the model can't observe (it conditions on
+        # "no event yet"). Shorting that "overpricing" is shorting certainty.
+        if a.inputs.get("mode") == "P(>=1)" and mv.yes_price >= 85:
+            return None
         fv = a.prob * 100                                   # pure anchor
         prior_c, prior_q = market_calib.calibration_prior(mv.yes_price, mv.category, d)
 

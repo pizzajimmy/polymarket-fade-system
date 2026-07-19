@@ -290,6 +290,14 @@ def _leader_out(params, days, end_date, question, ov):
     return p, inputs, f"sum of components ({age}y, {days}d window)", 2
 
 
+def _count_phrasing(q: str) -> bool:
+    """Cumulative-count market phrasings whose mid-window state we can't see."""
+    import re as _re
+    return bool(_re.search(r"exactly\s+\d+|\d+\s+or\s+(?:more|fewer|less|higher)|"
+                           r"at least\s+\d+|fewer than\s+\d+|less than\s+\d+|"
+                           r"more than\s+\d+\s", q))
+
+
 # Global earthquake rates per year at/above magnitude M (USGS long-term
 # averages, Gutenberg–Richter ~10x per magnitude unit). Log-linear
 # interpolation between anchors; operator-overridable via params/manual.
@@ -348,20 +356,19 @@ def _poisson_recurrence(params, days, end_date, question, ov):
         return None
     lam = ov.get("rate_annual", params.get("rate_annual", lam))
 
+    # COUNT markets ("exactly 2", "8 or more", "at least 3") are structurally
+    # unsupported: mid-window resolution depends on the count SO FAR, which we
+    # cannot observe — pricing the remaining window as if the count were zero
+    # is wrong, and the backtest proved it. P(>=1) only.
+    if _count_phrasing(q):
+        return None
+
     t = max(days, 1) / 365.0
-    lt = lam * t
-    exact = _re.search(r"exactly\s+(\d+)", q)
-    if exact:
-        k = int(exact.group(1))
-        p = math.exp(-lt) * lt ** k / math.factorial(k)
-        mode = f"P(K={k})"
-    else:
-        p = 1 - math.exp(-lt)
-        mode = "P(>=1)"
+    p = 1 - math.exp(-lam * t)
     inputs = {"event": label, "rate_annual": round(lam, 2), "window_days": days,
-              "mode": mode,
+              "mode": "P(>=1)",
               "clustering_caveat": "post-mainshock windows exceed background rate"}
-    return p, inputs, f"{label} at {lam:.1f}/yr over {days}d -> {mode}={p:.1%}", 2
+    return p, inputs, f"{label} at {lam:.1f}/yr over {days}d -> P(>=1)={p:.1%}", 2
 
 
 def _season_fraction(start: date, days: int, monthly: dict) -> float:
@@ -409,21 +416,17 @@ def _seasonal_poisson(params, days, end_date, question, ov):
             start = None
     if start is None:
         start = date.today()
+    if _count_phrasing(q):
+        return None                      # see _count_phrasing / poisson note
     if monthly:
         lt = lam * _season_fraction(start, days, monthly)
     else:
         lt = lam * max(days, 1) / 365.0
-    exact = _re.search(r"exactly\s+(\d+)", q)
-    if exact:
-        k = int(exact.group(1))
-        p = math.exp(-lt) * lt ** k / math.factorial(k)
-        mode = f"P(K={k})"
-    else:
-        p = 1 - math.exp(-lt)
-        mode = "P(>=1)"
+    p = 1 - math.exp(-lt)
     inputs = {"event": label, "rate_annual": round(lam, 2), "window_days": days,
-              "seasonal": bool(monthly), "expected_events": round(lt, 3), "mode": mode}
-    return p, inputs, f"{label} {lam:.1f}/yr seasonal -> {mode}={p:.1%}", 2
+              "seasonal": bool(monthly), "expected_events": round(lt, 3),
+              "mode": "P(>=1)"}
+    return p, inputs, f"{label} {lam:.1f}/yr seasonal -> P(>=1)={p:.1%}", 2
 
 
 @anchor_fn("legal_outcome_by_date")

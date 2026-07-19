@@ -6,7 +6,10 @@
   "anchor_fn": "poisson_recurrence",
   "match": {
     "any": ["\\bearthquakes?\\b", "\\bquake\\b"],
-    "none": []
+    "none": ["\\bwin\\b", "\\bbeat\\b", "\\bconference\\b", "championship", "playoff",
+             "\\bseries\\b", "finals?\\b", "\\bvs\\.?\\b", "\\bgame\\b",
+             "\\bcup\\b", "\\bmls\\b", "\\bdraft\\b", "\\bcoach\\b"]
   },
+  "_none_note": "San Jose Earthquakes (MLS) share the name.",
   "params": {}
 }

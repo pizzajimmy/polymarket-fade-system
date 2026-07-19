@@ -7,8 +7,11 @@
   "_note": "Atlantic climatology (1991-2020 NOAA averages) — DEFAULTS TO VERIFY. Rates are annual; 'monthly' spreads the season (values sum to 1). Pacific/other basins and ENSO-year adjustments: override rate_annual per market in anchors_manual.json. Ordered specific -> generic; first match wins.",
   "match": {
     "any": ["\\bhurricanes?\\b", "\\btropical storms?\\b", "\\bnamed storms?\\b", "\\btyphoons?\\b", "\\bcyclones?\\b"],
-    "none": []
+    "none": ["\\bwin\\b", "\\bbeat\\b", "\\bconference\\b", "championship", "playoff",
+             "\\bseries\\b", "finals?\\b", "\\bvs\\.?\\b", "\\bgame\\b", "season wins",
+             "\\bcup\\b", "\\bnhl\\b", "\\bnba\\b", "\\bdraft\\b", "\\bcoach\\b"]
   },
+  "_none_note": "Sports-team collisions: the backtest caught the model shorting the Carolina Hurricanes' playoff run (-187c on paper). Miami Heat, SJ Earthquakes, Iowa State Cyclones etc. share names with weather.",
   "params": {
     "events": [
       {"match": "cat(egory)?\\s*-?\\s*5.*(landfall|hit|strike)|landfall.*cat(egory)?\\s*-?\\s*5", "rate_annual": 0.06, "label": "Cat5 US landfall"},

@@ -84,6 +84,10 @@ def run(min_edge: float, cost: float, verbose: bool = False) -> None:
             prob, inputs, _note, _tier = out
             anchor_c = prob * 100
             implied = p["yes_price"]
+            # already-occurred guard (mirrors the live strategy): high-priced
+            # P(>=1) markets likely reflect an event the model can't see
+            if inputs.get("mode") == "P(>=1)" and implied >= 85:
+                continue
             edge = anchor_c - implied
             samples += 1
             gaps.append((fam, p["horizon"], edge))
