@@ -81,6 +81,10 @@ def simulate_fill(asks: list, usdc_amount: float) -> dict:
     if not asks:
         return {"error": "empty_book"}
 
+    # CLOB /book returns levels BEST-LAST (asks descending) — sort cheapest
+    # first or the walk starts at the worst level (bug live for months).
+    asks = sorted(asks, key=lambda a: float(a[0]))
+
     filled  = 0.0
     shares  = 0.0
     levels_consumed = 0
@@ -119,8 +123,9 @@ def simulate_fill(asks: list, usdc_amount: float) -> dict:
 
 def book_summary(book: dict) -> dict:
     """Summarise the full order book — spread, depth, imbalance."""
-    bids = book.get("bids", [])
-    asks = book.get("asks", [])
+    # CLOB /book returns BEST-LAST: best bid = highest, best ask = lowest.
+    bids = sorted(book.get("bids", []), key=lambda l: float(l[0]), reverse=True)
+    asks = sorted(book.get("asks", []), key=lambda l: float(l[0]))
 
     best_bid = float(bids[0][0]) * 100 if bids else None
     best_ask = float(asks[0][0]) * 100 if asks else None

@@ -85,8 +85,9 @@ def get_mid_price(token_id: str) -> float | None:
         )
         r.raise_for_status()
         book = r.json()
-        bids = book.get("bids", [])
-        asks = book.get("asks", [])
+        # CLOB /book returns levels BEST-LAST — sort or the "mid" is ~50c always
+        bids = sorted(book.get("bids", []), key=lambda l: float(l[0]), reverse=True)
+        asks = sorted(book.get("asks", []), key=lambda l: float(l[0]))
 
         best_bid = float(bids[0][0]) * 100 if bids else None
         best_ask = float(asks[0][0]) * 100 if asks else None
@@ -112,7 +113,7 @@ def simulate_slippage(token_id: str, usdc_amount: float) -> dict | None:
             timeout=10,
         )
         r.raise_for_status()
-        asks = r.json().get("asks", [])
+        asks = sorted(r.json().get("asks", []), key=lambda a: float(a[0]))
 
         filled, shares = 0.0, 0.0
         for price_s, size_s in asks:

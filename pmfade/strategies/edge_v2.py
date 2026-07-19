@@ -42,14 +42,22 @@ log = logging.getLogger("pmfade.edge_v2")
 
 
 def _walk_book_usd(levels: list, clip_usd: float, side_no: bool) -> tuple[float | None, float]:
-    """Walk one side of the CLOB book. `levels` are [price_str, size_shares_str],
-    best first. Returns (vwap_cents_for_our_side, usd_depth_within_impact_bound).
-    For NO purchases we fill against YES *bids*: our price per share = 1 − bid."""
+    """Walk one side of the CLOB book. `levels` are [price_str, size_shares_str].
+    Returns (vwap_cents_for_our_side, usd_depth_within_impact_bound).
+    For NO purchases we fill against YES *bids*: our price per share = 1 − bid.
+
+    NB the raw CLOB /book returns levels sorted BEST-LAST (bids ascending,
+    asks descending) — discovered live 2026-07 after months of the legacy
+    tooling silently walking from the worst level. Sort defensively so OUR
+    price ascends regardless of API order: asks by price asc, bids desc."""
+    levels = sorted(levels, key=lambda l: float(l[0] if isinstance(l, list) else l["price"]),
+                    reverse=side_no)
     filled = 0.0     # USD spent toward the clip
     shares = 0.0
     depth_usd = 0.0  # USD available within EV2_MAX_IMPACT_CENTS of top
     top_ours = None
-    for price_s, size_s in levels:
+    for lvl in levels:
+        price_s, size_s = (lvl[0], lvl[1]) if isinstance(lvl, list) else (lvl["price"], lvl["size"])
         p = float(price_s)                      # YES-side price, 0..1
         ours = (1 - p) if side_no else p        # what WE pay per share, 0..1
         if ours <= 0:
