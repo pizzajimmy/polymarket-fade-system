@@ -19,7 +19,7 @@ Jesus-return longshots — they're correctly-priced, not stale.
 
 from __future__ import annotations
 
-from .base import Strategy, Signal, MarketView, Context
+from .base import Strategy, Signal, MarketView, Context, executable_entry
 from .. import config as C
 
 
@@ -65,6 +65,9 @@ class SettlementLag(Strategy):
                     if side == "YES" else mv.yes_price)) * 2)
         score = max(20, score)
 
+        ee = executable_entry(side, mv.best_bid, mv.best_ask)
+        spread = (round(mv.best_ask - mv.best_bid, 2)
+                  if mv.best_bid is not None and mv.best_ask is not None else None)
         features = {
             "side_certain":  certain,
             "entry":         round(entry, 1),
@@ -78,6 +81,11 @@ class SettlementLag(Strategy):
             "window_min":    mv.window_min,
             "window_max":    mv.window_max,
             "category":      mv.category,
+            "best_bid":      mv.best_bid,
+            "best_ask":      mv.best_ask,
+            "spread":        spread,
+            "exec_entry":    ee,
+            "fill_haircut":  round(ee - entry, 2) if ee is not None else None,
         }
         rationale = (f"pinned {mv.yes_price:.1f}¢, {d}d to res, "
                      f"{annual_yield*100:.0f}%/yr carry → buy {side} @ {entry:.1f}¢")

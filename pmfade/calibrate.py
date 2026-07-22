@@ -275,6 +275,52 @@ def _exit_horizon_comparison(sigs, tracks, resolved, cost, strategy_id="news_fad
           + (f"{per_day:>+8.2f}  (~{mean_hold:.0f}d avg hold)" if per_day is not None else ""))
 
 
+def _fill_realism(sigs, tracks, resolved, strategy_id):
+    """The gate before any execution: does the edge survive being FILLED?
+    Re-grades resolved signals at the executable price (crossing the real
+    spread, recorded on each signal) vs the mid the strategy assumed. The
+    executable leg pays NO extra cost — the spread is already in the fill, and
+    resolution settlement is free — so this is the honest taker P&L. Only
+    signals carrying a quote (emitted since spread capture went live) count."""
+    import json as _json
+    mid, ex, haircuts = [], [], []
+    for s in sigs:
+        if s["strategy_id"] != strategy_id:
+            continue
+        res = tracks.get(s["signal_id"], {}).get("resolution",
+                                                 resolved.get(s["condition_id"]))
+        if res is None:
+            continue
+        try:
+            f = _json.loads(s["features"] or "{}")
+        except Exception:
+            continue
+        ee = f.get("exec_entry")
+        if ee is None:
+            continue
+        mid.append(position_return(s["side"], s["entry_price"], res))
+        ex.append(position_return(s["side"], ee, res))
+        if f.get("fill_haircut") is not None:
+            haircuts.append(f["fill_haircut"])
+    if len(ex) < 3:
+        n = sum(1 for s in sigs if s["strategy_id"] == strategy_id
+                and _json.loads(s["features"] or "{}").get("exec_entry") is not None)
+        print(f"\n▸ {strategy_id} — fill realism: only {len(ex)} resolved with a quote "
+              f"yet (capture is recent; accrues over time)")
+        return
+    def ci(xs):
+        lo, hi = _mean_ci(xs)
+        return (f"[{lo:+.1f}, {hi:+.1f}]" if lo == lo else "n/a")
+    print(f"\n▸ {strategy_id} — fill realism (same {len(ex)} resolved w/ quotes, "
+          f"taker, resolution)")
+    print(f"    at mid (gross):   {st.mean(mid):+.2f}¢  {ci(mid)}")
+    print(f"    at fill (taker):  {st.mean(ex):+.2f}¢  {ci(ex)}"
+          + ("  ✓ survives fills" if _mean_ci(ex)[0] > 0 else ""))
+    if haircuts:
+        print(f"    median haircut:   {st.median(haircuts):+.2f}¢   "
+              f"(what crossing the spread costs vs the assumed mid)")
+
+
 def _anchor_calibration(sigs, tracks, resolved):
     """Are our FAIR VALUES themselves calibrated? (handoff §8 monitor, signal-
     only remnant of Module G.) For each resolved v2 signal, compare the
@@ -365,6 +411,8 @@ def report(cost: float = 2.0):
     _delayed_entry(sigs, tracks, resolved, cost, "news_fade_v2")
     _exit_horizon_comparison(sigs, tracks, resolved, cost, "news_fade")
     _exit_horizon_comparison(sigs, tracks, resolved, cost, "news_fade_v2")
+    _fill_realism(sigs, tracks, resolved, "longshot_bias")
+    _fill_realism(sigs, tracks, resolved, "settlement_lag")
     _anchor_calibration(sigs, tracks, resolved)
     _v1_v2_overlap(sigs, tracks, resolved, cost)
 

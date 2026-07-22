@@ -97,6 +97,16 @@ class Context:
 
 # ── Strategy ───────────────────────────────────────────────────────────────────
 
+def executable_entry(side: str, best_bid, best_ask):
+    """The AGGRESSIVE fill price in cents for buying `side` (cross the spread),
+    or None if the quote is missing. Buying YES pays the YES ask; buying NO pays
+    the NO ask = 100 − YES bid. Recorded on signals so calibration can re-grade
+    edges at fillable prices, not the mid the strategy assumed."""
+    if side == "YES":
+        return round(best_ask, 1) if best_ask is not None else None
+    return round(100 - best_bid, 1) if best_bid is not None else None
+
+
 SignalOut = Union[Signal, list[Signal], None]
 
 

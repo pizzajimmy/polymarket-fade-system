@@ -15,7 +15,7 @@ track it to resolution, and let the win/loss tally settle it.
 
 from __future__ import annotations
 
-from .base import Strategy, Signal, MarketView, Context
+from .base import Strategy, Signal, MarketView, Context, executable_entry
 from .. import config as C
 
 # the bias is a political/economic-belief phenomenon; crypto/sports price-action
@@ -49,6 +49,9 @@ class LongshotBias(Strategy):
                   ((C.LS_PRICE_HI - C.LS_PRICE_LO) / 2)
         score = 45 + 10 * midband + (8 if mv.liquidity >= 10000 else 0)
 
+        ee = executable_entry("NO", mv.best_bid, mv.best_ask)
+        spread = (round(mv.best_ask - mv.best_bid, 2)
+                  if mv.best_bid is not None and mv.best_ask is not None else None)
         features = {
             "yes_price":    round(mv.yes_price, 1),
             "entry_no":     round(entry, 1),
@@ -57,6 +60,12 @@ class LongshotBias(Strategy):
             "annual_yield": round(annual_yield, 3),
             "liquidity":    round(mv.liquidity, 0),
             "category":     mv.category,
+            # fillability: exec_entry = the price you'd actually pay to buy NO
+            "best_bid":     mv.best_bid,
+            "best_ask":     mv.best_ask,
+            "spread":       spread,
+            "exec_entry":   ee,
+            "fill_haircut": round(ee - entry, 2) if ee is not None else None,
         }
         rationale = (f"longshot {mv.yes_price:.1f}¢, {d}d → buy NO @ {entry:.1f}¢ "
                      f"(collect {gain:.1f}¢ premium)")
