@@ -12,29 +12,42 @@ import requests
 
 log = logging.getLogger("pmfade.alerts")
 
-TG_TOKEN = os.environ.get("TG_TOKEN", "")
-TG_CHAT  = os.environ.get("TG_CHAT_ID", "")
-
 _EMOJI = {"news_fade": "📰", "settlement_lag": "⏳",
           "longshot_bias": "🎯", "correlated_lag": "🔗",
-          "edge_v2": "🧭", "news_fade_v2": "🕵️"}
+          "edge_v2": "🧭", "news_fade_v2": "🕵️", "rate_anchor": "📐"}
 
 
-def send_telegram(text: str) -> bool:
-    if not TG_TOKEN or not TG_CHAT:
-        log.info("[telegram not configured]\n%s", text)
+def _creds(strategy: str | None = None) -> tuple[str, str]:
+    """(token, chat_id) for a strategy: TG_TOKEN_<STRATEGY>/TG_CHAT_ID_<STRATEGY>
+    if both set, else the default TG_TOKEN/TG_CHAT_ID bot. Read at call time so a
+    single .env drives per-strategy routing (a separate bot = a separate token;
+    the chat_id may be reused — each bot has its own DM thread)."""
+    if strategy:
+        key = strategy.upper()
+        tok = os.environ.get(f"TG_TOKEN_{key}", "").strip()
+        chat = os.environ.get(f"TG_CHAT_ID_{key}", "").strip()
+        if tok and chat:
+            return tok, chat
+    return os.environ.get("TG_TOKEN", "").strip(), os.environ.get("TG_CHAT_ID", "").strip()
+
+
+def send_telegram(text: str, strategy: str | None = None) -> bool:
+    tok, chat = _creds(strategy)
+    if not tok or not chat:
+        log.info("[telegram not configured%s]\n%s",
+                 f" for {strategy}" if strategy else "", text)
         return False
     try:
         r = requests.post(
-            f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage",
-            json={"chat_id": TG_CHAT, "text": text, "parse_mode": "HTML",
+            f"https://api.telegram.org/bot{tok}/sendMessage",
+            json={"chat_id": chat, "text": text, "parse_mode": "HTML",
                   "disable_web_page_preview": True},
             timeout=10,
         )
         r.raise_for_status()
         return True
     except Exception as e:
-        log.error("Telegram failed: %s", e)
+        log.error("Telegram failed (%s): %s", strategy or "default", e)
         return False
 
 

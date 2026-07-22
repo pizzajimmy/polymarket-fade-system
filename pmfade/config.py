@@ -27,6 +27,18 @@ NOTIFY_MIN_SCORE   = _f("NOTIFY_MIN_SCORE", 80)
 NOTIFY_STRATEGIES  = {s.strip() for s in
                       os.environ.get("NOTIFY_STRATEGIES", "").split(",") if s.strip()}
 
+
+def notify_min_score(strategy: str) -> float:
+    """Per-strategy score floor NOTIFY_MIN_SCORE_<STRATEGY>, else the global one.
+    Read at call time so each strategy's bot can have its own threshold."""
+    v = os.environ.get(f"NOTIFY_MIN_SCORE_{strategy.upper()}")
+    if v is not None:
+        try:
+            return float(v)
+        except ValueError:
+            pass
+    return NOTIFY_MIN_SCORE
+
 # ── News-fade strategy ─────────────────────────────────────────────────────────
 NF_DROP_THRESHOLD   = _f("DROP_THRESHOLD", 15)
 NF_SPIKE_THRESHOLD  = _f("SPIKE_THRESHOLD", 15)
