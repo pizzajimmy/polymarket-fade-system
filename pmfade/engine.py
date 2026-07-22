@@ -204,10 +204,11 @@ def run_structure_screens(views: list[MarketView], dry_run: bool) -> int:
 def notify_new_signals() -> int:
     n = 0
     for row in store.unnotified_signals():
-        if (row["score"] or 0) >= C.NOTIFY_MIN_SCORE:
+        strat_ok = (not C.NOTIFY_STRATEGIES) or row["strategy_id"] in C.NOTIFY_STRATEGIES
+        if strat_ok and (row["score"] or 0) >= C.NOTIFY_MIN_SCORE:
             if alerts.send_telegram(alerts.format_signal(row)):
                 n += 1
-        store.mark_notified(row["signal_id"])   # mark either way; low-score = silent
+        store.mark_notified(row["signal_id"])   # mark either way; muted = silent
     return n
 
 

@@ -22,6 +22,10 @@ TRACK_WINDOW_DAYS  = 7      # how long a signal stays "open" for tracking
 
 # Alerts: only signals at/above this score get a Telegram push.
 NOTIFY_MIN_SCORE   = _f("NOTIFY_MIN_SCORE", 80)
+# Restrict Telegram pushes to these strategy ids (comma-separated in env).
+# Empty = alert on any strategy that clears NOTIFY_MIN_SCORE (the old behavior).
+NOTIFY_STRATEGIES  = {s.strip() for s in
+                      os.environ.get("NOTIFY_STRATEGIES", "").split(",") if s.strip()}
 
 # ── News-fade strategy ─────────────────────────────────────────────────────────
 NF_DROP_THRESHOLD   = _f("DROP_THRESHOLD", 15)
