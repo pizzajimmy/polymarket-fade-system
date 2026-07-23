@@ -152,23 +152,28 @@ def run_structure_screens(views: list[MarketView], dry_run: bool) -> int:
         if len(vs) < 2:
             continue
 
-        # negRisk: mutually-exclusive outcomes should sum to ~1. Legs priced
-        # <1¢ are filtered upstream, which only LOWERS the sum — so alert on
-        # over-sum only. Two sanity bounds (live probe 2026-07): count only
-        # legs with a real book (liquidity + quotes) — dead legs sit at stale
-        # midpoints; and sums far above 1 (we saw 6.26 across 15 legs) are
-        # price-data artifacts, not arbs — a real overround is a few percent.
+        # negRisk: exactly one leg resolves YES. Buying NO on k of the legs costs
+        # (100 − bid_i) each and pays out on at least k−1 of them, so
+        #     worst-case profit = Σ(YES BIDS) − 100¢
+        # — the arb test is on BIDS (executable), not mids. Summing mids
+        # (outcomePrices) counts the spread as edge: the Serbia PM book showed
+        # mids summing 1.09 while bids summed 0.94 — no arb at all, just wide
+        # books. Subsets are fine: if the winner isn't among the legs you bought,
+        # you do better, so the bid-sum test holds on whatever legs are live.
         if any(v.neg_risk for v in vs) and len(vs) >= 3:
             live = [v for v in vs if v.liquidity >= 500 and v.best_bid is not None]
             if len(live) >= 3:
-                total = sum(v.yes_price for v in live) / 100.0
-                if 1.06 <= total <= 1.60 and not store.structure_alert_recent("NEGRISK", slug):
-                    detail = f"sum(YES)={total:.2f} across {len(live)} live legs"
+                bid_sum = sum(v.best_bid for v in live) / 100.0
+                mid_sum = sum(v.yes_price for v in live) / 100.0
+                if 1.02 <= bid_sum <= 1.60 and not store.structure_alert_recent("NEGRISK", slug):
+                    detail = (f"sum(bids)={bid_sum:.2f} across {len(live)} legs → "
+                              f"buy NO on each, ~{(bid_sum-1)*100:.0f}¢/set "
+                              f"worst case (mids sum {mid_sum:.2f})")
                     store.insert_structure_alert("NEGRISK", slug, detail)
                     fired += 1
                     if not dry_run:
                         alerts.send_telegram(
-                            f"🧮 <b>NegRisk over-sum</b>\n<i>{live[0].question[:70]}…</i>\n"
+                            f"🧮 <b>NegRisk arb</b>\n<i>{live[0].question[:70]}…</i>\n"
                             f"{detail}\nhttps://polymarket.com/event/{slug}")
                     log.info("[screen] NEGRISK %s: %s", slug[:40], detail)
 
