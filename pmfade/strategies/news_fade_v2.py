@@ -95,34 +95,43 @@ class NewsFadeV2(Strategy):
         side = "YES" if direction == "DROP" else "NO"
         entry = mv.yes_price if side == "YES" else mv.no_price
 
-        fv, meta = compute_fv(mv)
-        basis = meta["basis"]
-        if fv is None:
-            fv, basis = pending["ref_price"] if direction == "SPIKE" else None, "none"
-            # for a DROP with no FV machinery, the pre-move price is the reference
-            if fv is None:
-                fv, basis = mv.prev_24h, "prev24h"
-            if fv is None:
-                store.decide_pending_fade(pending["id"], "suppressed", "no FV basis")
-                return None
-        elif basis == "none":
-            basis = "prev24h"
-            fv = mv.prev_24h if mv.prev_24h is not None else pending["ref_price"]
-
-        # gate 1: deviation from FV, in the fade direction, post-cooldown
-        deviation = (fv - mv.yes_price) if direction == "DROP" else (mv.yes_price - fv)
-        if deviation < C.FADE_MIN_DEVIATION_PTS:
-            store.decide_pending_fade(pending["id"], "suppressed",
-                                      f"deviation {deviation:.1f} < {C.FADE_MIN_DEVIATION_PTS}")
+        # ── gate 1: is there still a MOVE to fade? ─────────────────────────────
+        # Measured against the PRE-MOVE price, NOT fair value. Measuring it
+        # against FV made this algebraically identical to gate 2 (dev == ev_res
+        # on every signal we ever emitted), and since the calibration prior is a
+        # price-LEVEL statistic, any market parked at 35-60c "passed" on price
+        # band alone with the news move irrelevant — which is why 100% of early
+        # signals were SPIKE/buy-NO. Diagnosed 2026-07 from live alerts.
+        ref = mv.prev_24h if mv.prev_24h is not None else pending["ref_price"]
+        if ref is None:
+            store.decide_pending_fade(pending["id"], "suppressed", "no pre-move reference")
+            return None
+        move_dev = (ref - mv.yes_price) if direction == "DROP" else (mv.yes_price - ref)
+        if move_dev < C.FADE_MIN_DEVIATION_PTS:
+            store.decide_pending_fade(
+                pending["id"], "suppressed",
+                f"move reverted ({move_dev:.1f} < {C.FADE_MIN_DEVIATION_PTS})")
             return None
 
-        # gate 2: hold-to-resolution viability — fade entry +EV at expiry per FV
+        # ── gate 2: is it worth OWNING to expiry? ──────────────────────────────
+        # Independent structural check: anchor blend if a family matches, else
+        # the calibration prior (a genuine resolution-probability estimate — the
+        # right tool HERE, wrong tool for gate 1). With neither, viability is
+        # unassessable and we do not emit a fade dressed in a fair value it
+        # doesn't have.
+        fv, meta = compute_fv(mv)
+        basis = meta["basis"]
+        if fv is None or basis == "none":
+            store.decide_pending_fade(pending["id"], "suppressed",
+                                      "no structural FV — viability unassessable")
+            return None
         fv_side = fv if side == "YES" else 100 - fv
         ev_to_res = fv_side - entry
         if ev_to_res <= 2.0:                       # must clear ~cost held to expiry
             store.decide_pending_fade(pending["id"], "suppressed",
                                       f"not viable to resolution ({ev_to_res:+.1f}¢)")
             return None
+        deviation = move_dev                       # the fade signal is the MOVE
 
         a = meta.get("anchor_res")
         inputs = (a.inputs if a else None)
@@ -155,8 +164,11 @@ class NewsFadeV2(Strategy):
 
         store.decide_pending_fade(pending["id"], "promoted", f"dev {deviation:.1f}")
 
-        # anchor/prior-based FV alerts (floor 80); fallback-basis stays silent-but-logged
-        floor = 80 if basis in ("anchor", "prior") else 70
+        # A matched structural anchor is market-specific evidence; the
+        # calibration prior is only a price-level statistic, so prior-only fades
+        # start below the alert line and need a genuinely large unreverted move
+        # to earn a ping.
+        floor = 80 if basis == "anchor" else 70
         score = floor + (deviation - C.FADE_MIN_DEVIATION_PTS)
 
         # ── classifier verdict weighted into the score ─────────────────────────
@@ -192,7 +204,10 @@ class NewsFadeV2(Strategy):
             "direction": direction, "detected_at": pending["detected_at"],
             "ref_price": pending["ref_price"], "cooldown_min": round(age_min),
             "fv": round(fv, 1), "fv_basis": basis,
-            "deviation": round(deviation, 1), "ev_to_resolution": round(ev_to_res, 1),
+            "pre_move_ref": round(ref, 1),
+            "move_deviation": round(move_dev, 1),      # gate 1: unreverted move
+            "deviation": round(deviation, 1),
+            "ev_to_resolution": round(ev_to_res, 1),   # gate 2: structural, independent
             "family": (a.family if a else None), "anchor_inputs": inputs,
             "operator_check": "\n".join(check_lines),
             "headlines_n": len(headlines),

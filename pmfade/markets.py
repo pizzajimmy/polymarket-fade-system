@@ -77,7 +77,11 @@ _SPORTS = ["nba", "nfl", "nhl", "mlb", "nascar", "mls", "pga", "ufc", "wwe",
            "nl east", "nl west", "nl central", "al east", "al west", "al central",
            "pennant", "conference final", "mvp", "top scorer", "leading scorer", "draft pick",
            "esports", "valorant", "league of legends", "dota", "counter-strike",
-           "oscar", "grammy", "emmy", "golden globe", "box office", "netflix top"]
+           "oscar", "grammy", "emmy", "golden globe", "box office", "netflix top",
+           # roster/award markets that read as politics without these (live
+           # misclassifications 2026-07: Ballon d'Or, "play for the Chiefs")
+           "ballon d'or", "play for the", "signs with", "traded to", "next club",
+           "golden boot", "manager of the", "player of the"]
 
 
 def infer_category(question: str) -> str:
