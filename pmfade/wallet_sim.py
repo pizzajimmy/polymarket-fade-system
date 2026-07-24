@@ -79,7 +79,14 @@ def _spark(vals: list[float], width: int = 48) -> str:
 
 
 def simulate(trades: list[dict], bankroll: float, size: float, spread: float,
-             use_real: bool = True) -> dict:
+             use_real: bool = True, min_score: float = 0.0,
+             max_entry: float = 100.0) -> dict:
+    # Subset filters. max_entry is the sharpest lever on an insurance book:
+    # breakeven win rate == entry price, so capping entry at 92c means needing
+    # 92% wins instead of 94.6% — 2.6 extra points of margin, for free.
+    trades = [t for t in trades
+              if (t["score"] or 0) >= min_score
+              and t["entry_mid"] <= max_entry]
     cash = bankroll
     openp: list[dict] = []          # {close_ts, cid, shares, cost, win}
     held: set[str] = set()
@@ -181,7 +188,8 @@ def simulate(trades: list[dict], bankroll: float, size: float, spread: float,
     }
 
 
-def report(strategy: str, bankroll: float, size: float, spread: float, sweep: bool):
+def report(strategy: str, bankroll: float, size: float, spread: float, sweep: bool,
+           min_score: float = 0.0, max_entry: float = 100.0, subsets: bool = False):
     try:
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     except Exception:
@@ -196,7 +204,9 @@ def report(strategy: str, bankroll: float, size: float, spread: float, sweep: bo
         print(f"\nNo resolved {strategy} signals yet.")
         return
 
-    r = simulate(trades, bankroll, size, spread)
+    if min_score or max_entry < 100:
+        print(f"  filters: score >= {min_score:.0f}, entry <= {max_entry:.0f}¢")
+    r = simulate(trades, bankroll, size, spread, min_score=min_score, max_entry=max_entry)
     print(f"\n  resolved signals     {r['resolved']:,}")
     print(f"  trades taken         {r['taken']:,}   "
           f"(skipped: {r['skipped_cash']} no capital, {r['skipped_dup']} already held)")
@@ -230,10 +240,23 @@ def report(strategy: str, bankroll: float, size: float, spread: float, sweep: bo
             print(f"    {hc:>4.1f}¢     {s['pnl']:>+11,.2f}{s['ret_pct']:>9.1f}%"
                   f"{s['taken']:>9}{flag}")
 
+    if subsets:
+        print(f"\n  entry-cap subsets (breakeven win rate == entry price):")
+        print(f"    {'max entry':<12}{'trades':>8}{'win%':>8}{'breakeven':>11}"
+              f"{'margin':>9}{'P&L':>11}")
+        for cap in (99, 96, 94, 92, 90, 88):
+            s = simulate(trades, bankroll, size, spread, max_entry=cap)
+            if not s["taken"]:
+                continue
+            print(f"    <= {cap}¢      {s['taken']:>7}{s['win_rate']:>7.1f}%"
+                  f"{s['breakeven_wr']:>10.1f}%{s['wr_margin']:>+8.1f}"
+                  f"{s['pnl']:>+11,.2f}")
+
     print("\n  Caveats: positions marked at cost (drawdown is realized, not "
           "mark-to-market);\n  one position per market; correlated legs in the same "
           "event not modelled;\n  assumes every signal was actually fillable at "
-          "size.")
+          "size (median top-of-book\n  depth measured at ~$57 — sizing up widens the "
+          "haircut and moves you down\n  the sensitivity table).")
 
 
 def main():
@@ -244,9 +267,15 @@ def main():
     ap.add_argument("--spread", type=float, default=1.5,
                     help="assumed entry haircut in cents (measured median ~1.0, mean ~1.46)")
     ap.add_argument("--sweep", action="store_true", help="P&L across haircuts")
+    ap.add_argument("--subsets", action="store_true",
+                    help="P&L by entry-price cap (the margin lever)")
+    ap.add_argument("--min-score", type=float, default=0.0)
+    ap.add_argument("--max-entry", type=float, default=100.0,
+                    help="only trade entries at/below this price in cents")
     args = ap.parse_args()
     store.init_db()
-    report(args.strategy, args.bankroll, args.size, args.spread, args.sweep)
+    report(args.strategy, args.bankroll, args.size, args.spread, args.sweep,
+           args.min_score, args.max_entry, args.subsets)
 
 
 if __name__ == "__main__":
