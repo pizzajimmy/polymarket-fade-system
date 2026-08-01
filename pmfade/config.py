@@ -63,6 +63,9 @@ LS_PRICE_LO         = _f("LS_PRICE_LO", 4.0)    # longshot band: price in [LO, H
 LS_PRICE_HI         = _f("LS_PRICE_HI", 12.0)
 LS_MIN_DAYS_TO_RES  = _i("LS_MIN_DAYS_TO_RES", 14)
 LS_COOLDOWN_HRS     = _f("LS_COOLDOWN_HRS", 72)
+# Max cents of spread we'll cross to enter. Gross edge measured ~+1.9c, so
+# anything above ~1.5c is a losing trade before it starts.
+LS_MAX_HAIRCUT      = _f("LS_MAX_HAIRCUT", 1.0)
 
 # ── Correlated-lag strategy ────────────────────────────────────────────────────
 CL_MIN_LIQUIDITY    = _f("CL_MIN_LIQUIDITY", 1000)

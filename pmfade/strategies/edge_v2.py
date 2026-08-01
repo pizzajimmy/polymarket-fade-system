@@ -131,6 +131,17 @@ class EdgeV2(Strategy):
         cheap_is_yes = mv.yes_price <= mv.no_price
         cheap_fv = fv if cheap_is_yes else 100 - fv
         gates: dict[str, bool] = {}
+        # STRUCTURAL-FV GATE (added 2026-07 on evidence). With no anchor family,
+        # FV collapses to the calibration prior — a price-LEVEL statistic
+        # ("markets at 8c resolve YES 3% of the time"), not a market-specific
+        # fair value. Trading it just re-derives longshot_bias with extra steps
+        # (the v1-vs-v2 overlap section shows the two taking identical trades),
+        # and it is the same conceptual error already removed from
+        # news_fade_v2. Measured: prior-only resolved -41c/trade [-73.7, -8.4]
+        # at n=10, with anchor calibration flagging prior-only signals
+        # overconfident (70% implied vs 40% realized). Candidates are still
+        # logged for analysis; they just no longer emit.
+        gates["structural_fv"] = (meta["basis"] == "anchor")
         gates["shape"] = cheap_fv < cheap                    # cheap side overpriced
         side = ("NO" if cheap_is_yes else "YES")             # buy the expensive side
         entry = mv.no_price if side == "NO" else mv.yes_price

@@ -43,13 +43,26 @@ class LongshotBias(Strategy):
         ret = gain / entry
         annual_yield = ret * (365.0 / max(d, 1))
 
+        # FILLABILITY GATE (added 2026-07 on evidence). Measured at n=426: the
+        # gross edge at mid is ~+1.9c, but the median haircut to actually cross
+        # into these books is +3.4c — the edge is entirely consumed by the
+        # spread on the markets this strategy selects. (A live probe of the
+        # in-band universe found ~1.0c, but that sampled by VOLUME; the $3k
+        # liquidity floor lets much thinner books through.) Refuse to emit a
+        # signal we cannot fill at a price that leaves the edge intact.
+        ee = executable_entry("NO", mv.best_bid, mv.best_ask)
+        if ee is None:
+            return None                           # no quote -> unfillable, unknowable
+        haircut = ee - entry
+        if haircut > C.LS_MAX_HAIRCUT:
+            return None
+
         # Modest, deliberately flat score — we don't pretend to rank these well.
         # Slight nudge for liquidity and for the mid-band (cleanest bias zone).
         midband = 1.0 - abs(mv.yes_price - (C.LS_PRICE_LO + C.LS_PRICE_HI) / 2) / \
                   ((C.LS_PRICE_HI - C.LS_PRICE_LO) / 2)
         score = 45 + 10 * midband + (8 if mv.liquidity >= 10000 else 0)
 
-        ee = executable_entry("NO", mv.best_bid, mv.best_ask)
         spread = (round(mv.best_ask - mv.best_bid, 2)
                   if mv.best_bid is not None and mv.best_ask is not None else None)
         features = {
