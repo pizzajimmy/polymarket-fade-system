@@ -311,14 +311,53 @@ def _fill_realism(sigs, tracks, resolved, strategy_id):
     def ci(xs):
         lo, hi = _mean_ci(xs)
         return (f"[{lo:+.1f}, {hi:+.1f}]" if lo == lo else "n/a")
+
+    # Tail census. A normal-approximation CI is MEANINGLESS on a lottery-shaped
+    # book: at a 99% win rate the mean is decided entirely by how many ~-95c
+    # losses landed in the window. A tail-free subsample yields a tight, very
+    # positive CI that says nothing except "no loss happened yet" — exactly the
+    # trap that produced a spurious ✓ for settlement_lag at n=114.
+    big = [x for x in ex if x < -20]
+    mean_ex = st.mean(ex)
+    sig = _mean_ci(ex)[0] > 0
+    tail_free = not big
+
+    # what the full resolved book says about how often the tail actually lands
+    # NB explicit None checks: a resolution price of 0.0 is FALSY, so an
+    # `x or y` idiom here would silently drop every losing trade — i.e. exactly
+    # the tail this census exists to count.
+    full = []
+    for s in sigs:
+        if s["strategy_id"] != strategy_id:
+            continue
+        r = tracks.get(s["signal_id"], {}).get("resolution")
+        if r is None:
+            r = resolved.get(s["condition_id"])
+        if r is None:
+            continue
+        full.append(position_return(s["side"], s["entry_price"], r))
+    full_big = [x for x in full if x < -20]
+    expected_big = len(full_big) / len(full) * len(ex) if full else 0
+
     print(f"\n▸ {strategy_id} — fill realism (same {len(ex)} resolved w/ quotes, "
           f"taker, resolution)")
     print(f"    at mid (gross):   {st.mean(mid):+.2f}¢  {ci(mid)}")
-    print(f"    at fill (taker):  {st.mean(ex):+.2f}¢  {ci(ex)}"
-          + ("  ✓ survives fills" if _mean_ci(ex)[0] > 0 else ""))
+    print(f"    at fill (taker):  {mean_ex:+.2f}¢  {ci(ex)}"
+          + ("  ✓ survives fills" if sig and not tail_free else ""))
     if haircuts:
         print(f"    median haircut:   {st.median(haircuts):+.2f}¢   "
               f"(what crossing the spread costs vs the assumed mid)")
+    print(f"    tail in sample:   {len(big)} losses worse than -20¢"
+          + (f" (worst {min(ex):+.0f}¢)" if big else "")
+          + f"   ·  full book implies ~{expected_big:.1f}")
+    if tail_free and expected_big >= 0.5:
+        # one tail event, at the full book's average loss size
+        avg_big = st.mean(full_big) if full_big else -95.0
+        adj = (sum(ex) + avg_big) / (len(ex) + 1)
+        print(f"    ⚠ NO tail event in this window — the CI above is an artifact, "
+              f"not an edge.\n      One typical loss ({avg_big:+.0f}¢) drags the mean "
+              f"to {adj:+.2f}¢. Judge this book on the\n      full-sample line, not "
+              f"on a lucky window.")
 
 
 def _anchor_calibration(sigs, tracks, resolved):
