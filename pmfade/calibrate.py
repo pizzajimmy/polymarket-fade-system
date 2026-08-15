@@ -175,6 +175,32 @@ def _fmt_horizons(rows_by_h, cost):
               f"{st.mean(pct):>+7.1f}%")
 
 
+def _shape(rows, cost):
+    """Mean alone is a poor summary of a skewed book, and every strategy here is
+    skewed one way or the other: settlement/longshot are INSURANCE (many small
+    wins, rare huge loss — mean flattered until the tail lands), news_fade is a
+    LOTTERY (mostly small losses, rare huge win — mean carried by a handful of
+    trades). A normal-approximation CI is unreliable for both; this line shows
+    what the mean is actually made of."""
+    if len(rows) < 5:
+        return
+    net = [r - cost for _, r, _ in rows]
+    wins = [x for x in net if x > 0]
+    losses = [x for x in net if x <= 0]
+    if not wins or not losses:
+        return
+    med = st.median(net)
+    shape = ("insurance — mean rests on the rare loss not landing"
+             if len(wins) / len(net) >= 0.8 else
+             "lottery — mean rests on a few large wins"
+             if len(wins) / len(net) <= 0.4 else "mixed")
+    print(f"    shape: median {med:+.1f}¢ · avg win {st.mean(wins):+.1f}¢ "
+          f"×{len(wins)} · avg loss {st.mean(losses):+.1f}¢ ×{len(losses)}  ({shape})")
+    if (med < 0) != (st.mean(net) < 0):
+        print(f"    ⚠ mean and median disagree in sign — the average trade "
+              f"loses; the mean is a tail artifact")
+
+
 def _fmt_bands(bands):
     print(f"    {'band':<8}{'n':>4}{'win%':>7}{'mean¢':>8}{'95% CI (¢)':>18}{'cap%':>7}")
     for b, s in bands.items():
@@ -360,6 +386,43 @@ def _fill_realism(sigs, tracks, resolved, strategy_id):
               f"on a lucky window.")
 
 
+def _gate_fix_split(sigs, tracks, resolved, cost):
+    """news_fade_v2's gates were rebuilt on 2026-07-22 (the two gates had been
+    algebraically identical, and FV came from a price-level statistic). Signals
+    before and after that are DIFFERENT STRATEGIES; pooling them makes the
+    number meaningless. Post-fix signals carry `move_deviation` in features —
+    a clean discriminator, no date guessing."""
+    import json as _json
+    pre, post = [], []
+    for s in sigs:
+        if s["strategy_id"] != "news_fade_v2":
+            continue
+        r = tracks.get(s["signal_id"], {}).get("resolution")
+        if r is None:
+            r = resolved.get(s["condition_id"])
+        if r is None:
+            continue
+        try:
+            f = _json.loads(s["features"] or "{}")
+        except Exception:
+            f = {}
+        ret = position_return(s["side"], s["entry_price"], r) - cost
+        (post if "move_deviation" in f else pre).append(ret)
+    if not pre and not post:
+        return
+    print("\n▸ news_fade_v2 — before vs after the 2026-07-22 gate rebuild")
+    for label, v in (("pre-fix  (void)", pre), ("post-fix (live)", post)):
+        if not v:
+            print(f"    {label:<18}   no resolutions yet")
+            continue
+        lo, hi = _mean_ci(v)
+        ci = f"[{lo:+.1f}, {hi:+.1f}]" if lo == lo else "n/a"
+        win = 100 * sum(1 for x in v if x > 0) / len(v)
+        print(f"    {label:<18} n={len(v):<4} {st.mean(v):+6.1f}¢  {win:>3.0f}% win  {ci}")
+    if pre and not post:
+        print("    (the headline number above is entirely pre-fix — treat as void)")
+
+
 def _anchor_calibration(sigs, tracks, resolved):
     """Are our FAIR VALUES themselves calibrated? (handoff §8 monitor, signal-
     only remnant of Module G.) For each resolved v2 signal, compare the
@@ -442,6 +505,7 @@ def report(cost: float = 2.0):
         rows_by_h = {h: _returns_at([s for s in sigs if s["strategy_id"] == strat],
                                     tracks, resolved, h) for h in HORIZONS}
         _fmt_horizons(rows_by_h, cost)
+        _shape(rows_by_h.get("resolution", []), cost)
         if d["bands"]:
             print("    by score band (resolution, net of cost):")
             _fmt_bands(d["bands"])
@@ -450,6 +514,7 @@ def report(cost: float = 2.0):
     _delayed_entry(sigs, tracks, resolved, cost, "news_fade_v2")
     _exit_horizon_comparison(sigs, tracks, resolved, cost, "news_fade")
     _exit_horizon_comparison(sigs, tracks, resolved, cost, "news_fade_v2")
+    _gate_fix_split(sigs, tracks, resolved, cost)
     _fill_realism(sigs, tracks, resolved, "longshot_bias")
     _fill_realism(sigs, tracks, resolved, "settlement_lag")
     _anchor_calibration(sigs, tracks, resolved)
