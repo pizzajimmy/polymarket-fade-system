@@ -190,10 +190,13 @@ def _shape(rows, cost):
     if not wins or not losses:
         return
     med = st.median(net)
+    # classify on the GROSS payoff shape - costs turn small gross wins into net
+    # losses and would mislabel a 99%-gross-win insurance book as "mixed"
+    gross_win = sum(1 for _, r, _ in rows if r > 0) / len(rows)
     shape = ("insurance — mean rests on the rare loss not landing"
-             if len(wins) / len(net) >= 0.8 else
+             if gross_win >= 0.8 else
              "lottery — mean rests on a few large wins"
-             if len(wins) / len(net) <= 0.4 else "mixed")
+             if gross_win <= 0.4 else "mixed")
     print(f"    shape: median {med:+.1f}¢ · avg win {st.mean(wins):+.1f}¢ "
           f"×{len(wins)} · avg loss {st.mean(losses):+.1f}¢ ×{len(losses)}  ({shape})")
     if (med < 0) != (st.mean(net) < 0):
@@ -376,14 +379,25 @@ def _fill_realism(sigs, tracks, resolved, strategy_id):
     print(f"    tail in sample:   {len(big)} losses worse than -20¢"
           + (f" (worst {min(ex):+.0f}¢)" if big else "")
           + f"   ·  full book implies ~{expected_big:.1f}")
+    # Tail DEFICIT adjustment. A tail being present is not enough - it has to be
+    # present at the RATE the full book implies. On a ~4%-loss insurance book a
+    # few missing disasters are worth more than the entire edge, so a check mark
+    # earned on an under-sampled window is still an artifact, just a subtler one.
+    avg_big = st.mean(full_big) if full_big else -95.0
+    deficit = expected_big - len(big)
     if tail_free and expected_big >= 0.5:
-        # one tail event, at the full book's average loss size
-        avg_big = st.mean(full_big) if full_big else -95.0
         adj = (sum(ex) + avg_big) / (len(ex) + 1)
-        print(f"    ⚠ NO tail event in this window — the CI above is an artifact, "
-              f"not an edge.\n      One typical loss ({avg_big:+.0f}¢) drags the mean "
-              f"to {adj:+.2f}¢. Judge this book on the\n      full-sample line, not "
-              f"on a lucky window.")
+        print(f"    !! NO tail event in this window - the CI above is an artifact, "
+              f"not an edge.\n       One typical loss ({avg_big:+.0f}c) drags the "
+              f"mean to {adj:+.2f}c. Judge this book on the\n       full-sample "
+              f"line, not on a lucky window.")
+    elif deficit >= 1.0:
+        adj = (sum(ex) + deficit * avg_big) / (len(ex) + deficit)
+        verdict = ("the check above does NOT survive it" if sig and adj <= 0
+                   else "the edge survives it")
+        print(f"    !! tail under-sampled by {deficit:.1f} events. Topping up to "
+              f"the implied rate\n       (at {avg_big:+.0f}c each) gives "
+              f"{adj:+.2f}c - {verdict}.")
 
 
 def _gate_fix_split(sigs, tracks, resolved, cost):
