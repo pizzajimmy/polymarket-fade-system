@@ -368,6 +368,27 @@ def _fill_realism(sigs, tracks, resolved, strategy_id):
     full_big = [x for x in full if x < -20]
     expected_big = len(full_big) / len(full) * len(ex) if full else 0
 
+    # DURATION BIAS. Quote capture is recent, so the quoted-and-resolved subset
+    # is skewed toward SHORT-dated markets — the ones that had time to settle.
+    # On an insurance book short-dated longshots are the safe ones, so this
+    # subset can look better than the strategy is, and can under-sample the
+    # tail for a reason that has nothing to do with the edge.
+    def _dur(sig_rows):
+        out = []
+        for s2 in sig_rows:
+            try:
+                dd = _json.loads(s2["features"] or "{}").get("days_to_res")
+            except Exception:
+                dd = None
+            if dd is not None:
+                out.append(dd)
+        return out
+    quoted_ids = {s2["signal_id"] for s2 in sigs
+                  if s2["strategy_id"] == strategy_id
+                  and _json.loads(s2["features"] or "{}").get("exec_entry") is not None}
+    dur_q = _dur([s2 for s2 in sigs if s2["signal_id"] in quoted_ids])
+    dur_all = _dur([s2 for s2 in sigs if s2["strategy_id"] == strategy_id])
+
     print(f"\n▸ {strategy_id} — fill realism (same {len(ex)} resolved w/ quotes, "
           f"taker, resolution)")
     print(f"    at mid (gross):   {st.mean(mid):+.2f}¢  {ci(mid)}")
@@ -376,6 +397,11 @@ def _fill_realism(sigs, tracks, resolved, strategy_id):
     if haircuts:
         print(f"    median haircut:   {st.median(haircuts):+.2f}¢   "
               f"(what crossing the spread costs vs the assumed mid)")
+    if dur_q and dur_all and st.mean(dur_all) > 0:
+        ratio = st.mean(dur_q) / st.mean(dur_all)
+        note = "  (short-dated skew — flatters an insurance book)" if ratio < 0.75 else ""
+        print(f"    duration:         {st.mean(dur_q):.0f}d avg in this window vs "
+              f"{st.mean(dur_all):.0f}d for the strategy{note}")
     print(f"    tail in sample:   {len(big)} losses worse than -20¢"
           + (f" (worst {min(ex):+.0f}¢)" if big else "")
           + f"   ·  full book implies ~{expected_big:.1f}")
