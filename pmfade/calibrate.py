@@ -426,6 +426,60 @@ def _fill_realism(sigs, tracks, resolved, strategy_id):
               f"{adj:+.2f}c - {verdict}.")
 
 
+def _breakeven_by_price(sigs, tracks, resolved, cost, strategy_id):
+    """Where in the book does the premium actually live?
+
+    For a 100-payout binary there is an exact identity: paying `entry` cents to
+    win 100 needs a win rate of `entry`% to break even gross, so
+
+        net cents per trade  ==  (observed win%) - (entry + cost)
+
+    i.e. the margin in percentage points IS the profit in cents. Score bands
+    obscure this; price buckets show it directly. Added because longshot_bias's
+    60-69 score band went significantly NEGATIVE (-6.9c) while 40-59 were
+    positive: backing the entries out of the band table showed the losing band
+    pays MORE for the longshot (8.1c vs 6.7c) and wins LESS often (87% vs 97%).
+    That points at price, not score, as the real axis — so measure it directly."""
+    rows = []
+    for sg in sigs:
+        if sg["strategy_id"] != strategy_id:
+            continue
+        r = tracks.get(sg["signal_id"], {}).get("resolution")
+        if r is None:
+            r = resolved.get(sg["condition_id"])
+        if r is None or not sg["entry_price"]:
+            continue
+        rows.append((sg["entry_price"],
+                     position_return(sg["side"], sg["entry_price"], r)))
+    if len(rows) < 40:
+        return
+    buckets = {}
+    for entry, ret in rows:
+        buckets.setdefault(int(entry // 2) * 2, []).append((entry, ret))
+    shown = {b: v for b, v in buckets.items() if len(v) >= 15}
+    if len(shown) < 2:
+        return
+    print(f"\n\u25b8 {strategy_id} \u2014 breakeven by entry price "
+          f"(net \u00a2/trade == win% \u2212 (entry + cost))")
+    print(f"    {'entry':<10}{'n':>6}{'needs':>8}{'wins':>8}{'margin':>9}"
+          f"{'net\u00a2':>8}{'95% CI':>16}")
+    for b in sorted(shown):
+        v = shown[b]
+        n = len(v)
+        avg_entry = st.mean(e for e, _ in v)
+        needs = avg_entry + cost
+        wins = 100.0 * sum(1 for _, r in v if r > 0) / n
+        net = [r - cost for _, r in v]
+        lo, hi = _mean_ci(net)
+        ci = f"[{lo:+.1f}, {hi:+.1f}]" if lo == lo else "n/a"
+        mark = " \u2713" if (lo == lo and lo > 0) else ""
+        print(f"    {b}-{b+2:<7}{n:>6}{needs:>7.1f}%{wins:>7.1f}%"
+              f"{wins-needs:>+9.1f}{st.mean(net):>+8.1f}{ci:>16}{mark}")
+    print("    (a bucket is tradeable only where wins clears needs \u2014 "
+          "cheap longshots\n     carry the premium, mid-priced ones are "
+          "priced fairly or worse)")
+
+
 def _gate_fix_split(sigs, tracks, resolved, cost):
     """news_fade_v2's gates were rebuilt on 2026-07-22 (the two gates had been
     algebraically identical, and FV came from a price-level statistic). Signals
@@ -557,6 +611,8 @@ def report(cost: float = 2.0):
     _gate_fix_split(sigs, tracks, resolved, cost)
     _fill_realism(sigs, tracks, resolved, "longshot_bias")
     _fill_realism(sigs, tracks, resolved, "settlement_lag")
+    _breakeven_by_price(sigs, tracks, resolved, cost, "longshot_bias")
+    _breakeven_by_price(sigs, tracks, resolved, cost, "settlement_lag")
     _anchor_calibration(sigs, tracks, resolved)
     _v1_v2_overlap(sigs, tracks, resolved, cost)
 
